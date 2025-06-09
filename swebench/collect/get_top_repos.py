@@ -9,14 +9,17 @@ from ghapi.core import GhApi
 
 __all__ = ["get_top_repos_by_language"]
 
-def get_top_repos_by_language(language: str, max_repos: int, api: GhApi) -> List[str]:
+def get_top_repos_by_language(
+    language: str, max_repos: int, api: GhApi, pushed_after: str = None
+) -> List[str]:
     """
-    Fetch top-starred GitHub repositories for a given language.
+    Fetch top-starred GitHub repositories for a given language, optionally filtering by recency.
 
     Args:
         language (str): The programming language to search for.
         max_repos (int): The maximum number of repositories to fetch.
         api (GhApi): An authenticated GhApi instance.
+        pushed_after (str, optional): Only include repositories pushed after this date (YYYY-MM-DD). Defaults to None.
 
     Returns:
         List[str]: List of "owner/name" repo strings.
@@ -25,12 +28,20 @@ def get_top_repos_by_language(language: str, max_repos: int, api: GhApi) -> List
     repos = []
     seen = set()
     page = 1
-    print(f"Fetching top {max_repos} repositories for language: {language}")
+    print(
+        f"Fetching top {max_repos} repositories for language: {language}"
+        + (f" (pushed after {pushed_after})" if pushed_after else "")
+    )
+
+    # Build search query
+    base_query = f"language:{language}"
+    if pushed_after:
+        base_query += f" pushed:>={pushed_after}"
 
     while len(repos) < max_repos:
         try:
             result = api.search.repos(
-                q=f"language:{language}",
+                q=base_query,
                 sort="stars",
                 order="desc",
                 per_page=per_page,

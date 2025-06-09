@@ -225,5 +225,108 @@ if __name__ == "__main__":
         help="Cutoff date for PRs to consider in format YYYYMMDD",
         default=None,
     )
+    parser.add_argument(
+        "--recency_months", "--months",
+        type=int,
+        default=None,
+        help="(Optional) Only include repositories pushed within the last N months (approximate, 30*N days).",
+    )
     args = parser.parse_args()
-    main(**vars(args))
+
+    # Calculate repo cutoff if recency_months is set
+    repo_cutoff_date = None
+    if args.recency_months is not None:
+        from datetime import datetime, timedelta
+        repo_cutoff_date = (datetime.utcnow() - timedelta(days=30 * args.recency_months)).strftime("%Y-%m-%d")
+
+    # Patch main call to pass the cutoff to language-based repo discovery
+    def main_with_recency(
+        repos: list = None,
+        path_prs: str = None,
+        path_tasks: str = None,
+        max_pulls: int = None,
+        cutoff_date: str = None,
+        languages: list = None,
+        max_repos_per_language: int = 50,
+    ):
+        all_repos = set()
+        if repos:
+            if isinstance(repos, str):
+                repos = [r.strip() for r in repos.split(",")]
+            for repo in repos:
+                if repo:
+                    all_repos.add(repo.strip(",").strip())
+
+        if languages:
+            if isinstance(languages, str):
+                languages = [l.strip() for l in languages.split(",")]
+            tokens_str = os.getenv("GITHUB_TOKENS")
+            if not tokens_str:
+                raise Exception(
+                    "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+                )
+            gh_token = tokens_str.split(",")[0].strip()
+            api = GhApi(token=gh_token)
+            for lang in languages:
+                try:
+                    # Pass repo_cutoff_date as pushed_after if set
+                    from swebench.collect.get_top_repos import get_top_repos_by_language
+                    top_repos = get_top_repos_by_language(
+                        lang, max_repos_per_language, api, pushed_after=repo_cutoff_date
+                    )
+                    for repo in top_repos:
+                        all_repos.add(repo)
+                except Exception as e:
+                    print(f"Error getting repos for language '{lang}': {e}")
+
+        if not all_repos:
+            raise Exception(
+                "No repositories provided or discovered. Use --repos and/or --languages."
+            )
+
+        all_repos_sorted = sorted(all_repos)
+        print(f"Summary: {len(all_repos_sorted)} total repositories selected for processing.")
+        if languages:
+            print("Languages used: ", ", ".join(languages))
+        print("Repositories:")
+        for repo in all_repos_sorted:
+            print(f" - {repo}")
+
+        path_prs_abs, path_tasks_abs = os.path.abspath(path_prs), os.path.abspath(path_tasks)
+        print(f"Will save PR data to {path_prs_abs}")
+        print(f"Will save task instance data to {path_tasks_abs}")
+
+        tokens = os.getenv("GITHUB_TOKENS")
+        if not tokens:
+            raise Exception(
+                "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            )
+        tokens = tokens.split(",")
+        data_task_lists = split_instances(all_repos_sorted, len(tokens))
+
+        data_pooled = [
+            {
+                "repos": repos,
+                "path_prs": path_prs_abs,
+                "path_tasks": path_tasks_abs,
+                "max_pulls": max_pulls,
+                "cutoff_date": cutoff_date,
+                "token": token,
+            }
+            for repos, token in zip(data_task_lists, tokens)
+        ]
+
+        from multiprocessing import Pool
+        with Pool(len(tokens)) as p:
+            p.map(construct_data_files, data_pooled)
+
+    # Replace call to main with enhanced version
+    main_with_recency(
+        repos=args.repos,
+        path_prs=args.path_prs,
+        path_tasks=args.path_tasks,
+        max_pulls=args.max_pulls,
+        cutoff_date=args.cutoff_date,
+        languages=args.languages,
+        max_repos_per_language=args.max_repos_per_language,
+    )

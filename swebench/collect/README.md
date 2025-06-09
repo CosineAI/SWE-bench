@@ -42,6 +42,15 @@ In this section, we briefly describe each of the files in this directory and its
         --path_prs '<path to folder to save PRs to>' \
         --path_tasks '<path to folder to save tasks to>'
     ```
+    * To only include repositories pushed within the last N months (approximate, 30*N days), use the `--recency_months N` (or `--months N`) flag:
+    ```
+    python get_tasks_pipeline.py \
+        --languages python \
+        --max_repos_per_language 10 \
+        --recency_months 6 \
+        --path_prs '<path to folder to save PRs to>' \
+        --path_tasks '<path to folder to save tasks to>'
+    ```
     * You may also combine `--repos` and `--languages` to merge explicit and auto-discovered repos.
 
 **⛏️ GitHub Data Collection**
