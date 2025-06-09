@@ -309,6 +309,46 @@ def _extract_hints(pull: dict, repo: Repo, issue_number: int) -> list[str]:
     return comments
 
 
+import os
+
+def _is_test_path(path: str) -> bool:
+    """
+    Returns True if the given path is very likely a test file or directory based on common cross-language conventions.
+    """
+    # Normalize path and filename for case-insensitive checks
+    lower_path = path.lower()
+    base = os.path.basename(lower_path)
+
+    # Common substrings to look for in the path
+    test_substrings = [
+        "test",
+        "tests",
+        "spec",
+        "specs",
+        "e2e",
+        "integration",
+        "unittest",
+        "unit_test",
+    ]
+    if any(sub in lower_path for sub in test_substrings):
+        # Avoid false positives for docs or guides that just mention 'testing' in their name
+        # Only match files, not docs or guides unless they really look like tests
+        if base.endswith((".md", ".rst", ".txt")) and not (
+            base.startswith("test") or base.endswith("test")
+        ):
+            return False
+        return True
+
+    # File name patterns: _test.<ext>
+    if re.search(r"_test\.[a-z0-9]+$", base):
+        return True
+
+    # File name patterns: .test.<ext> or .spec.<ext>
+    if re.search(r"\.(test|spec)\.[a-z0-9]+$", base):
+        return True
+
+    return False
+
 def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     """
     Get patch and test patch from PR
@@ -324,9 +364,7 @@ def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     patch_test = ""
     patch_fix = ""
     for hunk in PatchSet(patch):
-        if any(
-            test_word in hunk.path for test_word in ["test", "tests", "e2e", "testing"]
-        ):
+        if _is_test_path(hunk.path):
             patch_test += str(hunk)
         else:
             patch_fix += str(hunk)
