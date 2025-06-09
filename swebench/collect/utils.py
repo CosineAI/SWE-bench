@@ -309,6 +309,48 @@ def _extract_hints(pull: dict, repo: Repo, issue_number: int) -> list[str]:
     return comments
 
 
+def is_test_file(path: str) -> bool:
+    """
+    Returns True if the given file path refers to a test file across popular languages.
+
+    Args:
+        path (str): The file path to check.
+
+    Returns:
+        bool: True if the path is considered a test file.
+    """
+    # Directory indicators (case-insensitive)
+    DIR_KEYWORDS = [
+        "test", "tests", "__tests__", "spec", "specs", "src/test",
+        "testsuite", "testing", "e2e", "integration"
+    ]
+    # Common suffixes (case-sensitive)
+    SUFFIXES = [
+        "_test.py", "_test.go", "_test.rs", "_test.c", "_test.cpp", "_test.rb",
+        "_test.ts", "_test.js", "Test.java", "Test.kt", "Test.cs", "Test.php", "Test.cpp"
+    ]
+    # Regexes (case-sensitive)
+    TEST_REGEXES = [
+        r".*/test/.*",
+        r".*/tests?/.*"
+    ]
+
+    lower_path = path.lower()
+    # Directory keywords (case-insensitive, anywhere in path)
+    for keyword in DIR_KEYWORDS:
+        if keyword.lower() in lower_path:
+            return True
+    # Suffixes (case-sensitive)
+    for suffix in SUFFIXES:
+        if path.endswith(suffix):
+            return True
+    # Regex matches
+    for regex in TEST_REGEXES:
+        if re.search(regex, path):
+            return True
+    return False
+
+
 def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     """
     Get patch and test patch from PR
@@ -324,9 +366,7 @@ def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     patch_test = ""
     patch_fix = ""
     for hunk in PatchSet(patch):
-        if any(
-            test_word in hunk.path for test_word in ["test", "tests", "e2e", "testing"]
-        ):
+        if is_test_file(hunk.path):
             patch_test += str(hunk)
         else:
             patch_fix += str(hunk)
