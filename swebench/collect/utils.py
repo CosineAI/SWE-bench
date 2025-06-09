@@ -324,9 +324,8 @@ def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     patch_test = ""
     patch_fix = ""
     for hunk in PatchSet(patch):
-        if any(
-            test_word in hunk.path for test_word in ["test", "tests", "e2e", "testing"]
-        ):
+        path_lower = hunk.path.lower()
+        if any(word in path_lower for word in ("test", "tests", "e2e", "testing")):
             patch_test += str(hunk)
         else:
             patch_fix += str(hunk)
