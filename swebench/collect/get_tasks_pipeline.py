@@ -131,7 +131,7 @@ def main(
     if languages:
         # Accept comma-separated string or list
         if isinstance(languages, str):
-            languages = [l.strip() for l in languages.split(",")]
+            languages = [l.strip() for l in languages.split(",")]  # noqa: E741
         # Get GitHub token for GhApi (use first token)
         tokens_str = os.getenv("GITHUB_TOKENS")
         if not tokens_str:
@@ -259,7 +259,7 @@ if __name__ == "__main__":
 
         if languages:
             if isinstance(languages, str):
-                languages = [l.strip() for l in languages.split(",")]
+                languages = [l.strip() for l in languages.split(",")]  # noqa: E741
             tokens_str = os.getenv("GITHUB_TOKENS")
             if not tokens_str:
                 raise Exception(
