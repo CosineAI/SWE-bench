@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from multiprocessing import Pool
 from swebench.collect.build_dataset import main as build_dataset
 from swebench.collect.print_pulls import main as print_pulls
+from swebench.collect.get_top_repos import get_top_repos_by_language
+from ghapi.core import GhApi
 
 
 load_dotenv()
@@ -95,11 +97,13 @@ def construct_data_files(data: dict):
 
 
 def main(
-    repos: list,
-    path_prs: str,
-    path_tasks: str,
+    repos: list = None,
+    path_prs: str = None,
+    path_tasks: str = None,
     max_pulls: int = None,
     cutoff_date: str = None,
+    languages: list = None,
+    max_repos_per_language: int = 50,
 ):
     """
     Spawns multiple threads given multiple GitHub tokens for collecting fine tuning data
@@ -109,11 +113,57 @@ def main(
         path_prs (str): Path to save PR data files to
         path_tasks (str): Path to save task instance data files to
         cutoff_date (str): Cutoff date for PRs to consider in format YYYYMMDD
+        languages (list): List of language names (optional)
+        max_repos_per_language (int): Max repos to collect per language (optional)
     """
-    path_prs, path_tasks = os.path.abspath(path_prs), os.path.abspath(path_tasks)
-    print(f"Will save PR data to {path_prs}")
-    print(f"Will save task instance data to {path_tasks}")
-    print(f"Received following repos to create task instances for: {repos}")
+    # Gather repos via languages if necessary
+    all_repos = set()
+    # Handle explicit repos from CLI
+    if repos:
+        # Accept comma-separated string or list
+        if isinstance(repos, str):
+            repos = [r.strip() for r in repos.split(",")]
+        for repo in repos:
+            if repo:
+                all_repos.add(repo.strip(",").strip())
+
+    # Handle language-based repo fetching
+    if languages:
+        # Accept comma-separated string or list
+        if isinstance(languages, str):
+            languages = [l.strip() for l in languages.split(",")]
+        # Get GitHub token for GhApi (use first token)
+        tokens_str = os.getenv("GITHUB_TOKENS")
+        if not tokens_str:
+            raise Exception(
+                "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            )
+        gh_token = tokens_str.split(",")[0].strip()
+        api = GhApi(token=gh_token)
+        for lang in languages:
+            try:
+                top_repos = get_top_repos_by_language(lang, max_repos_per_language, api)
+                for repo in top_repos:
+                    all_repos.add(repo)
+            except Exception as e:
+                print(f"Error getting repos for language '{lang}': {e}")
+
+    if not all_repos:
+        raise Exception(
+            "No repositories provided or discovered. Use --repos and/or --languages."
+        )
+
+    all_repos = sorted(all_repos)
+    print(f"Summary: {len(all_repos)} total repositories selected for processing.")
+    if languages:
+        print("Languages used: ", ", ".join(languages))
+    print("Repositories:")
+    for repo in all_repos:
+        print(f" - {repo}")
+
+    path_prs_abs, path_tasks_abs = os.path.abspath(path_prs), os.path.abspath(path_tasks)
+    print(f"Will save PR data to {path_prs_abs}")
+    print(f"Will save task instance data to {path_tasks_abs}")
 
     tokens = os.getenv("GITHUB_TOKENS")
     if not tokens:
@@ -121,13 +171,13 @@ def main(
             "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
         )
     tokens = tokens.split(",")
-    data_task_lists = split_instances(repos, len(tokens))
+    data_task_lists = split_instances(all_repos, len(tokens))
 
     data_pooled = [
         {
             "repos": repos,
-            "path_prs": path_prs,
-            "path_tasks": path_tasks,
+            "path_prs": path_prs_abs,
+            "path_tasks": path_tasks_abs,
             "max_pulls": max_pulls,
             "cutoff_date": cutoff_date,
             "token": token,
@@ -145,6 +195,18 @@ if __name__ == "__main__":
         "--repos",
         nargs="+",
         help="List of repositories (e.g., `sqlfluff/sqlfluff`) to create task instances for",
+    )
+    parser.add_argument(
+        "--languages",
+        nargs="+",
+        help="Programming language(s) to fetch top GitHub repos for (e.g., --languages python javascript go)",
+        default=None,
+    )
+    parser.add_argument(
+        "--max_repos_per_language",
+        type=int,
+        help="Max repos to fetch for each language (default: 50)",
+        default=50,
     )
     parser.add_argument(
         "--path_prs", type=str, help="Path to folder to save PR data files to"

@@ -33,6 +33,16 @@ In this section, we briefly describe each of the files in this directory and its
 * `get_top_pypi.py`
     * Purpose: Retrieves the PyPI URL, GitHub URL, # of ⭐, and # of Issues + PRs for the [top 5000](https://hugovk.github.io/top-pypi-packages/") most downloaded PyPI packages.
     * Usage: `python get_top_pypi.py`
+* `get_tasks_pipeline.py` (language-driven repo selection)
+    * You can now specify `--languages` (e.g. `--languages python javascript go`) to automatically collect the top starred GitHub repositories for one or more languages. Use `--max_repos_per_language` to control how many repos per language (default: 50). Example:
+    ```
+    python get_tasks_pipeline.py \
+        --languages python javascript go \
+        --max_repos_per_language 30 \
+        --path_prs '<path to folder to save PRs to>' \
+        --path_tasks '<path to folder to save tasks to>'
+    ```
+    * You may also combine `--repos` and `--languages` to merge explicit and auto-discovered repos.
 
 **⛏️ GitHub Data Collection**
 * `print_pulls.py`
