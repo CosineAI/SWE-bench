@@ -309,24 +309,51 @@ def _extract_hints(pull: dict, repo: Repo, issue_number: int) -> list[str]:
     return comments
 
 
-def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
+def extract_patches(
+    pull: dict, repo: Repo, languages: Optional[list[str]] = None
+) -> tuple[str, str]:
     """
-    Get patch and test patch from PR
+    Get patch and test patch from PR, supporting multi-language test keyword logic.
 
     Args:
         pull (dict): PR dictionary object from GitHub
         repo (Repo): Repo object
+        languages (list[str], optional): List of languages to use for test keyword mapping.
     Return:
         patch_change_str (str): gold patch
         patch_test_str (str): test patch
     """
+    # Multi-language test keyword mapping
+    LANGUAGE_TEST_KEYWORDS = {
+        "python": ["test", "tests", "testing", "e2e"],
+        "javascript": ["test", "tests", "__tests__", "spec", "specs", "e2e"],
+        "typescript": ["test", "tests", "__tests__", "spec", "specs", "e2e"],
+        "java": ["test", "tests", "/test/", "Test", "Tests"],
+        "ruby": ["test", "tests", "spec", "specs"],
+        "go": ["_test.go"],
+        "csharp": ["test", "tests"],
+    }
+    # If not provided, default to Python for backward compatibility
+    if not languages:
+        all_keywords = set(LANGUAGE_TEST_KEYWORDS["python"])
+    else:
+        all_keywords = set()
+        for lang in languages:
+            lang_key = lang.strip().lower()
+            if lang_key in LANGUAGE_TEST_KEYWORDS:
+                all_keywords.update(LANGUAGE_TEST_KEYWORDS[lang_key])
+            else:
+                # Fallback: use python's as baseline for unknown lang
+                all_keywords.update(LANGUAGE_TEST_KEYWORDS["python"])
+    # Lowercase all keywords for consistency
+    all_keywords = {kw.lower() for kw in all_keywords}
+
     patch = requests.get(pull["diff_url"]).text
     patch_test = ""
     patch_fix = ""
     for hunk in PatchSet(patch):
-        if any(
-            test_word in hunk.path for test_word in ["test", "tests", "e2e", "testing"]
-        ):
+        hunk_path = hunk.path.lower()
+        if any(test_word in hunk_path for test_word in all_keywords):
             patch_test += str(hunk)
         else:
             patch_fix += str(hunk)

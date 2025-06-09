@@ -48,14 +48,16 @@ def construct_data_files(data: dict):
             path_prs (str): Path to save PR data files to
             path_tasks (str): Path to save task instance data files to
             token (str): GitHub token to use for API requests
+            languages (str, optional): Comma-separated language list
     """
-    repos, path_prs, path_tasks, max_pulls, cutoff_date, token = (
+    repos, path_prs, path_tasks, max_pulls, cutoff_date, token, languages = (
         data["repos"],
         data["path_prs"],
         data["path_tasks"],
         data["max_pulls"],
         data["cutoff_date"],
         data["token"],
+        data.get("languages", None),
     )
     for repo in repos:
         repo = repo.strip(",").strip()
@@ -78,7 +80,7 @@ def construct_data_files(data: dict):
             path_task = os.path.join(path_tasks, f"{repo_name}-task-instances.jsonl")
             if not os.path.exists(path_task):
                 print(f"Task instance data for {repo} not found, creating...")
-                build_dataset(path_pr, path_task, token)
+                build_dataset(path_pr, path_task, token, languages=languages)
                 print(
                     f"✅ Successfully saved task instance data for {repo} to {path_task}"
                 )
@@ -100,6 +102,7 @@ def main(
     path_tasks: str,
     max_pulls: int = None,
     cutoff_date: str = None,
+    languages: str = None,
 ):
     """
     Spawns multiple threads given multiple GitHub tokens for collecting fine tuning data
@@ -109,11 +112,14 @@ def main(
         path_prs (str): Path to save PR data files to
         path_tasks (str): Path to save task instance data files to
         cutoff_date (str): Cutoff date for PRs to consider in format YYYYMMDD
+        languages (str, optional): Comma-separated list of languages
     """
     path_prs, path_tasks = os.path.abspath(path_prs), os.path.abspath(path_tasks)
     print(f"Will save PR data to {path_prs}")
     print(f"Will save task instance data to {path_tasks}")
     print(f"Received following repos to create task instances for: {repos}")
+    if languages:
+        print(f"Using languages for patch splitting: {languages}")
 
     tokens = os.getenv("GITHUB_TOKENS")
     if not tokens:
@@ -131,6 +137,7 @@ def main(
             "max_pulls": max_pulls,
             "cutoff_date": cutoff_date,
             "token": token,
+            "languages": languages,
         }
         for repos, token in zip(data_task_lists, tokens)
     ]
@@ -161,6 +168,12 @@ if __name__ == "__main__":
         "--cutoff_date",
         type=str,
         help="Cutoff date for PRs to consider in format YYYYMMDD",
+        default=None,
+    )
+    parser.add_argument(
+        "--languages",
+        type=str,
+        help="Comma-separated list of languages (e.g. python,javascript,ruby). Default is python.",
         default=None,
     )
     args = parser.parse_args()

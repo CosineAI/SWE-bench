@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_instance(repo: Repo, pull: dict) -> dict:
+def create_instance(repo: Repo, pull: dict, languages: Optional[list[str]] = None) -> dict:
     """
     Create a single task instance from a pull request, where task instance is:
 
@@ -29,8 +29,9 @@ def create_instance(repo: Repo, pull: dict) -> dict:
         patch (str): reference solution as .patch (apply to base commit),
         test_patch (str): test suite as .patch (apply to base commit),
     }
+    languages (list[str], optional): Programming languages for test keyword logic
     """
-    patch, test_patch = extract_patches(pull, repo)
+    patch, test_patch = extract_patches(pull, repo, languages=languages)
     problem_statement, hints = extract_problem_statement_and_hints(pull, repo)
     return {
         "repo": repo.repo.full_name,
@@ -94,7 +95,7 @@ def has_test_patch(instance: dict) -> bool:
     return True
 
 
-def main(pr_file: str, output: str, token: Optional[str] = None):
+def main(pr_file: str, output: str, token: Optional[str] = None, languages: Optional[str] = None):
     """
     Main thread for creating task instances from pull requests
 
@@ -102,6 +103,7 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
         pr_file (str): path to pull request JSONL file
         output (str): output file name
         token (str): GitHub token
+        languages (str, optional): Comma-separated languages list
     """
     if token is None:
         # Get GitHub token from environment variable if not provided
@@ -111,6 +113,11 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
         # Return repo object for a given repo name
         owner, repo = repo_name.split("/")
         return Repo(owner, repo, token=token)
+
+    # Parse languages arg to list
+    languages_list = None
+    if languages:
+        languages_list = [lang.strip() for lang in languages.split(",") if lang.strip()]
 
     repos = dict()
     completed = 0
@@ -168,7 +175,7 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
                 if repo_name not in repos:
                     repos[repo_name] = load_repo(repo_name)
                 repo = repos[repo_name]
-                instance = create_instance(repo, pull)
+                instance = create_instance(repo, pull, languages=languages_list)
                 if is_valid_instance(instance):
                     # If valid, write to .all output file
                     print(
@@ -192,5 +199,6 @@ if __name__ == "__main__":
     parser.add_argument("pr_file", type=str, help="Path to pull request JSONL file")
     parser.add_argument("output", type=str, help="Output file name")
     parser.add_argument("--token", type=str, help="GitHub token")
+    parser.add_argument("--languages", type=str, help="Comma-separated list of languages (e.g. python,javascript,ruby)", default=None)
     args = parser.parse_args()
     main(**vars(args))

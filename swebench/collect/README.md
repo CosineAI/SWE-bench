@@ -13,6 +13,8 @@ This folder includes the code for the first two parts of the benchmark construct
 
 We include a comprehensive [tutorial](docs/guides/collection.md) that describes the end-to-end procedure for collecting evaluation task instances from PyPI repositories.
 
+> SWE-bench's collection pipeline now supports **multi-language PR collection**. Supply `--languages python,javascript,ruby` (comma-separated) to the collection scripts to split test patches appropriately for each language. See `get_top_repos.py` for popular repo selection in any language.
+
 > SWE-bench's collection pipeline is currently designed to target PyPI packages. We hope to expand SWE-bench to more repositories and languages in the future.
 
 <img src="../../docs/assets/figures/collection.png">
@@ -33,6 +35,9 @@ In this section, we briefly describe each of the files in this directory and its
 * `get_top_pypi.py`
     * Purpose: Retrieves the PyPI URL, GitHub URL, # of ⭐, and # of Issues + PRs for the [top 5000](https://hugovk.github.io/top-pypi-packages/") most downloaded PyPI packages.
     * Usage: `python get_top_pypi.py`
+* `get_top_repos.py`
+    * Purpose: Fetches the most-starred repositories from the GitHub API for any language(s) (`--languages python,javascript,ruby ...`) and writes a list of repos to a file.
+    * Usage: `python get_top_repos.py --languages python,javascript --per-language 100 --output repo_list.txt`
 
 **⛏️ GitHub Data Collection**
 * `print_pulls.py`
