@@ -32,24 +32,27 @@ PR_KEYWORDS = {
 
 
 class Repo:
-    def __init__(self, owner: str, name: str, token: Optional[str] = None):
+    def __init__(self, owner: str, name: str, token: Optional[str] = None, token_rotator=None):
         """
         Init to retrieve target repository and create ghapi tool
 
         Args:
             owner (str): owner of target repository
             name (str): name of target repository
-            token (str): github token
+            token (str): github token (optional if using token rotation)
+            token_rotator: TokenRotator instance (optional)
         """
         self.owner = owner
         self.name = name
         self.token = token
-        self.api = GhApi(token=token)
+        # TokenRotator instance for rotating tokens on 403 errors
+        self.token_rotator = token_rotator
+        self.api = GhApi(token=token if token else (token_rotator.current_token() if token_rotator else None))
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
-        API call wrapper with rate limit handling (checks every 5 minutes if rate limit is reset)
+        API call wrapper with rate limit and token rotation handling.
 
         Args:
             func (callable): API function to call
@@ -57,23 +60,62 @@ class Repo:
         Return:
             values (dict): response object of `func`
         """
-        while True:
+        # Import here to avoid circular import at module level
+        max_attempts = 1
+        token_rotator = self.token_rotator
+        if token_rotator is None:
+            try:
+                from swebench.collect.token_utils import token_rotator as global_token_rotator
+                token_rotator = global_token_rotator
+                max_attempts = token_rotator.num_tokens()
+            except Exception:
+                token_rotator = None
+        else:
+            max_attempts = token_rotator.num_tokens() if token_rotator else 1
+
+        attempt = 0
+        last_403 = False
+        while attempt < max_attempts:
             try:
                 values = func(**kwargs)
                 return values
             except HTTP403ForbiddenError:
-                while True:
-                    rl = self.api.rate_limit.get()
+                last_403 = True
+                if not token_rotator:
+                    # Fall back to old behavior: wait for rate limit
+                    while True:
+                        rl = self.api.rate_limit.get()
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rate limit exceeded for token {str(self.token)[:10]}, "
+                            f"waiting for 5 minutes, remaining calls: {rl.resources.core.remaining}"
+                        )
+                        if rl.resources.core.remaining > 0:
+                            break
+                        time.sleep(60 * 5)
+                    continue
+                else:
+                    # Try next token
+                    old_token = self.token
+                    new_token = token_rotator.next_token()
+                    self.api = GhApi(token=new_token)
+                    self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Rate limit exceeded for token {self.token[:10]}, "
-                        f"waiting for 5 minutes, remaining calls: {rl.resources.core.remaining}"
+                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts})."
                     )
-                    if rl.resources.core.remaining > 0:
-                        break
-                    time.sleep(60 * 5)
+                    attempt += 1
+                    continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
                 return None
+            except Exception as e:
+                logger.error(f"[{self.owner}/{self.name}] Unhandled error in call_api: {e}")
+                raise
+        # If we reach here, all tokens exhausted or repeated rate limit
+        if last_403 and token_rotator:
+            logger.error(
+                f"[{self.owner}/{self.name}] All tokens exhausted (403)."
+            )
+        return None
 
     def extract_resolved_issues(self, pull: dict) -> list[str]:
         """
