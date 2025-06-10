@@ -12,7 +12,7 @@ from swebench.collect.build_dataset import main as build_dataset
 from swebench.collect.print_pulls import main as print_pulls
 from swebench.collect.get_top_repos import get_top_repos_by_language
 from ghapi.core import GhApi
-
+from swebench.collect.token_utils import get_tokens
 
 load_dotenv()
 
@@ -132,13 +132,13 @@ def main(
         # Accept comma-separated string or list
         if isinstance(languages, str):
             languages = [l.strip() for l in languages.split(",")]  # noqa: E741
-        # Get GitHub token for GhApi (use first token)
-        tokens_str = os.getenv("GITHUB_TOKENS")
-        if not tokens_str:
+        # Get GitHub tokens for GhApi (use first token)
+        tokens = get_tokens()
+        if not tokens:
             raise Exception(
-                "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
             )
-        gh_token = tokens_str.split(",")[0].strip()
+        gh_token = tokens[0].strip()
         api = GhApi(token=gh_token)
         for lang in languages:
             try:
@@ -165,12 +165,11 @@ def main(
     print(f"Will save PR data to {path_prs_abs}")
     print(f"Will save task instance data to {path_tasks_abs}")
 
-    tokens = os.getenv("GITHUB_TOKENS")
+    tokens = get_tokens()
     if not tokens:
         raise Exception(
-            "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
         )
-    tokens = tokens.split(",")
     data_task_lists = split_instances(all_repos, len(tokens))
 
     data_pooled = [
@@ -260,12 +259,12 @@ if __name__ == "__main__":
         if languages:
             if isinstance(languages, str):
                 languages = [l.strip() for l in languages.split(",")]  # noqa: E741
-            tokens_str = os.getenv("GITHUB_TOKENS")
-            if not tokens_str:
+            tokens = get_tokens()
+            if not tokens:
                 raise Exception(
-                    "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+                    "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
                 )
-            gh_token = tokens_str.split(",")[0].strip()
+            gh_token = tokens[0].strip()
             api = GhApi(token=gh_token)
             for lang in languages:
                 try:
@@ -296,12 +295,11 @@ if __name__ == "__main__":
         print(f"Will save PR data to {path_prs_abs}")
         print(f"Will save task instance data to {path_tasks_abs}")
 
-        tokens = os.getenv("GITHUB_TOKENS")
+        tokens = get_tokens()
         if not tokens:
             raise Exception(
-                "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
             )
-        tokens = tokens.split(",")
         data_task_lists = split_instances(all_repos_sorted, len(tokens))
 
         data_pooled = [
