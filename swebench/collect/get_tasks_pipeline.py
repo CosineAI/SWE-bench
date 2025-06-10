@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from multiprocessing import Pool
 from swebench.collect.build_dataset import main as build_dataset
 from swebench.collect.print_pulls import main as print_pulls
+from swebench.collect import token_fetcher
 
 
 load_dotenv()
@@ -121,12 +122,30 @@ def main(
     if languages:
         print(f"Using languages for patch splitting: {languages}")
 
-    tokens = os.getenv("GITHUB_TOKENS")
-    if not tokens:
+    tokens_env = os.getenv("GITHUB_TOKENS")
+    tokens = None
+
+    if tokens_env:
+        tokens = [tok.strip() for tok in tokens_env.split(",") if tok.strip()]
+    else:
+        team_ids = os.getenv("TEAM_IDS")
+        if team_ids:
+            team_slugs = [t.strip() for t in team_ids.split(",") if t.strip()]
+            tokens = []
+            for slug in team_slugs:
+                tok = token_fetcher.get_token_for_team(slug)
+                tokens.append(tok)
+            print(f"Fetched {len(tokens)} tokens from local provider")
+        else:
+            raise Exception(
+                "Missing GITHUB_TOKENS and TEAM_IDS; cannot proceed. Please set GITHUB_TOKENS or TEAM_IDS."
+            )
+
+    if not tokens or len(tokens) == 0:
         raise Exception(
-            "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            "No tokens provided. Please set GITHUB_TOKENS or ensure TEAM_IDS yields at least one token."
         )
-    tokens = tokens.split(",")
+
     data_task_lists = split_instances(repos, len(tokens))
 
     data_pooled = [
