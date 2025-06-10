@@ -47,18 +47,28 @@ def construct_data_files(data: dict):
             repos (list): List of repositories to retrieve instruction data for
             path_prs (str): Path to save PR data files to
             path_tasks (str): Path to save task instance data files to
-            token (str): GitHub token to use for API requests
+            team_ids (list): Team slugs for token rotator
+            domain (str): Domain for token service
+            auth_header (str|None): Optional authorization header
             languages (str, optional): Comma-separated language list
     """
-    repos, path_prs, path_tasks, max_pulls, cutoff_date, token, languages = (
-        data["repos"],
-        data["path_prs"],
-        data["path_tasks"],
-        data["max_pulls"],
-        data["cutoff_date"],
-        data["token"],
-        data.get("languages", None),
-    )
+    from swebench.collect.token_manager import GitHubTokenRotator
+    import swebench.collect.utils as utils
+
+    repos = data["repos"]
+    path_prs = data["path_prs"]
+    path_tasks = data["path_tasks"]
+    max_pulls = data["max_pulls"]
+    cutoff_date = data["cutoff_date"]
+    team_ids = data["team_ids"]
+    domain = data.get("domain", "http://localhost:3001")
+    auth_header = data.get("auth_header", None)
+    languages = data.get("languages", None)
+
+    # Set up rotator for this process and inject to utils global
+    rotator = GitHubTokenRotator(team_ids, domain=domain, auth_header=auth_header)
+    utils.TOKEN_ROTATOR = rotator
+
     for repo in repos:
         repo = repo.strip(",").strip()
         repo_name = repo.split("/")[1]
@@ -69,7 +79,7 @@ def construct_data_files(data: dict):
             if not os.path.exists(path_pr):
                 print(f"Pull request data for {repo} not found, creating...")
                 print_pulls(
-                    repo, path_pr, token, max_pulls=max_pulls, cutoff_date=cutoff_date
+                    repo, path_pr, None, max_pulls=max_pulls, cutoff_date=cutoff_date
                 )
                 print(f"✅ Successfully saved PR data for {repo} to {path_pr}")
             else:
@@ -80,7 +90,7 @@ def construct_data_files(data: dict):
             path_task = os.path.join(path_tasks, f"{repo_name}-task-instances.jsonl")
             if not os.path.exists(path_task):
                 print(f"Task instance data for {repo} not found, creating...")
-                build_dataset(path_pr, path_task, token, languages=languages)
+                build_dataset(path_pr, path_task, None, languages=languages)
                 print(
                     f"✅ Successfully saved task instance data for {repo} to {path_task}"
                 )
@@ -105,7 +115,7 @@ def main(
     languages: str = None,
 ):
     """
-    Spawns multiple threads given multiple GitHub tokens for collecting fine tuning data
+    Spawns multiple processes, each with its own GitHubTokenRotator, for collecting fine tuning data.
 
     Args:
         repos (list): List of repositories to retrieve instruction data for
@@ -121,28 +131,40 @@ def main(
     if languages:
         print(f"Using languages for patch splitting: {languages}")
 
-    tokens = os.getenv("GITHUB_TOKENS")
-    if not tokens:
+    team_ids_str = os.getenv("TEAM_IDS", "")
+    if not team_ids_str:
         raise Exception(
-            "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            "Missing TEAM_IDS env var. Set TEAM_IDS to a comma-separated list of team slugs (e.g. 'alpha,beta,gamma')."
         )
-    tokens = tokens.split(",")
-    data_task_lists = split_instances(repos, len(tokens))
+    team_ids = [x.strip() for x in team_ids_str.split(",") if x.strip()]
+    if not team_ids:
+        raise Exception(
+            "TEAM_IDS env var is empty. Set TEAM_IDS to a comma-separated list of team slugs (e.g. 'alpha,beta,gamma')."
+        )
+
+    auth_header = os.getenv("GITHUB_AUTH_HEADER", None)
+    domain = os.getenv("GITHUB_TOKEN_DOMAIN", "http://localhost:3001")
+
+    # All processes get the same team_ids, domain, auth_header
+    num_workers = len(team_ids)
+    data_task_lists = split_instances(repos, num_workers)
 
     data_pooled = [
         {
-            "repos": repos,
+            "repos": repos_subset,
             "path_prs": path_prs,
             "path_tasks": path_tasks,
             "max_pulls": max_pulls,
             "cutoff_date": cutoff_date,
-            "token": token,
+            "team_ids": team_ids,
+            "domain": domain,
+            "auth_header": auth_header,
             "languages": languages,
         }
-        for repos, token in zip(data_task_lists, tokens)
+        for repos_subset in data_task_lists
     ]
 
-    with Pool(len(tokens)) as p:
+    with Pool(num_workers) as p:
         p.map(construct_data_files, data_pooled)
 
 

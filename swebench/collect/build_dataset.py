@@ -110,9 +110,9 @@ def main(pr_file: str, output: str, token: Optional[str] = None, languages: Opti
         token = os.environ.get("GITHUB_TOKEN")
 
     def load_repo(repo_name):
-        # Return repo object for a given repo name
+        # Return repo object for a given repo name, using token rotator if available
         owner, repo = repo_name.split("/")
-        return Repo(owner, repo, token=token)
+        return Repo(owner, repo)
 
     # Parse languages arg to list
     languages_list = None
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("pr_file", type=str, help="Path to pull request JSONL file")
     parser.add_argument("output", type=str, help="Output file name")
-    parser.add_argument("--token", type=str, help="GitHub token")
+    parser.add_argument("--token", type=str, help="GitHub token (deprecated, use TEAM_IDS and the rotator for multi-team setups)")
     parser.add_argument("--languages", type=str, help="Comma-separated list of languages (e.g. python,javascript,ruby)", default=None)
     args = parser.parse_args()
     main(**vars(args))

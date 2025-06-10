@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import logging
 import re
 import requests
@@ -11,6 +10,9 @@ from ghapi.core import GhApi
 from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError
 from typing import Callable, Iterator, Optional
 from unidiff import PatchSet
+
+# Module-level placeholder for a token rotator (populated by get_tasks_pipeline)
+TOKEN_ROTATOR = None
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -32,24 +34,47 @@ PR_KEYWORDS = {
 
 
 class Repo:
-    def __init__(self, owner: str, name: str, token: Optional[str] = None):
+    def __init__(
+        self,
+        owner: str,
+        name: str,
+        token_rotator=None,
+        token: Optional[str] = None,
+    ):
         """
         Init to retrieve target repository and create ghapi tool
 
         Args:
             owner (str): owner of target repository
             name (str): name of target repository
-            token (str): github token
+            token_rotator: GitHubTokenRotator instance (optional)
+            token (str): github token (optional)
         """
+        from swebench.collect.utils import TOKEN_ROTATOR  # avoid circular import
+
         self.owner = owner
         self.name = name
-        self.token = token
-        self.api = GhApi(token=token)
+
+        # Prefer explicit token_rotator, else use global, else fall back to token.
+        if token_rotator is not None:
+            self.token_rotator = token_rotator
+        elif TOKEN_ROTATOR is not None:
+            self.token_rotator = TOKEN_ROTATOR
+        else:
+            self.token_rotator = None
+
+        if self.token_rotator is not None:
+            self.token = self.token_rotator.get_token()
+        else:
+            self.token = token
+
+        self.api = GhApi(token=self.token)
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
-        API call wrapper with rate limit handling (checks every 5 minutes if rate limit is reset)
+        API call wrapper with rate limit handling (checks every 5 minutes if rate limit is reset).
+        If using a token_rotator, rotates on 403/rate-limit instead of sleeping.
 
         Args:
             func (callable): API function to call
@@ -57,20 +82,40 @@ class Repo:
         Return:
             values (dict): response object of `func`
         """
+        retry_count = 0
+        max_rotations = len(getattr(self.token_rotator, "team_ids", [])) if self.token_rotator else 1
         while True:
             try:
                 values = func(**kwargs)
                 return values
             except HTTP403ForbiddenError:
-                while True:
-                    rl = self.api.rate_limit.get()
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Rate limit exceeded for token {self.token[:10]}, "
-                        f"waiting for 5 minutes, remaining calls: {rl.resources.core.remaining}"
-                    )
-                    if rl.resources.core.remaining > 0:
-                        break
-                    time.sleep(60 * 5)
+                rl = self.api.rate_limit.get()
+                logger.info(
+                    f"[{self.owner}/{self.name}] Rate limit exceeded for token {self.token[:10]}, remaining calls: {rl.resources.core.remaining}"
+                )
+                if self.token_rotator and rl.resources.core.remaining == 0:
+                    try:
+                        new_token = self.token_rotator.rotate_token()
+                        self.token = new_token
+                        self.api = GhApi(token=new_token)
+                        logger.info(f"[{self.owner}/{self.name}] Rotated to new token for team: {self.token_rotator.team_ids[self.token_rotator._current_index]}")
+                        retry_count += 1
+                        if retry_count > max_rotations:
+                            logger.error(f"[{self.owner}/{self.name}] All tokens exhausted after rotating through all teams, falling back to wait-for-reset loop.")
+                            time.sleep(60 * 5)
+                    except Exception as e:
+                        logger.error(f"[{self.owner}/{self.name}] Could not rotate token: {e}")
+                        time.sleep(60 * 5)
+                    continue
+                else:
+                    while True:
+                        rl = self.api.rate_limit.get()
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Waiting for rate limit reset for token {self.token[:10]}, checking again in 5 minutes"
+                        )
+                        if rl.resources.core.remaining > 0:
+                            break
+                        time.sleep(60 * 5)
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
                 return None
