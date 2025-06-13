@@ -1,6 +1,9 @@
 import os
 import requests
 import threading
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def get_tokens():
     """
