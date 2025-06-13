@@ -8,7 +8,7 @@ import time
 
 from bs4 import BeautifulSoup
 from ghapi.core import GhApi
-from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError
+from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError, HTTP401UnauthorizedError
 from typing import Callable, Iterator, Optional
 from unidiff import PatchSet
 
@@ -101,6 +101,22 @@ class Repo:
                     self.token = new_token
                     logger.info(
                         f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts})."
+                    )
+                    attempt += 1
+                    continue
+            except HTTP401UnauthorizedError:
+                if not token_rotator:
+                    logger.error(
+                        f"[{self.owner}/{self.name}] Unauthorized (401) and no token rotator available."
+                    )
+                    raise
+                else:
+                    old_token = self.token
+                    new_token = token_rotator.next_token()
+                    self.api = GhApi(token=new_token)
+                    self.token = new_token
+                    logger.info(
+                        f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts})."
                     )
                     attempt += 1
                     continue
