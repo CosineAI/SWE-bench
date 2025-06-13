@@ -53,6 +53,7 @@ class TokenRotator:
     Rotates through GitHub tokens associated with team slugs in TEAM_IDS.
     Fetches tokens on demand and caches them for the session.
     Thread-safe for concurrent use.
+    Supports invalidating tokens (e.g., on 401 error) so they are not reused.
     """
     def __init__(self):
         team_ids = os.getenv("TEAM_IDS")
@@ -74,6 +75,7 @@ class TokenRotator:
         self.tokens_cache = {}  # slug -> token
         self.idx = 0
         self.lock = threading.Lock()
+        self.invalid_slugs = set()
 
     def fetch_token(self, slug):
         """Fetch token for a single team slug from the token service."""
@@ -87,25 +89,80 @@ class TokenRotator:
             raise ValueError(f"No 'token' field in response from {url} for team '{slug}'")
         return token
 
-    def current_token(self):
-        """Return token for current index (fetch and cache if needed)."""
+    def _slug_from_token(self, token_str):
+        """Find the slug corresponding to a particular token string."""
         with self.lock:
+            for slug, tok in self.tokens_cache.items():
+                if tok == token_str:
+                    return slug
+        return None
+
+    def invalidate_token(self, token_str):
+        """
+        Invalidate the token (by token string), marking its slug as invalid.
+        That slug will be skipped when rotating tokens.
+        """
+        with self.lock:
+            slug = self._slug_from_token(token_str)
+            if slug is not None:
+                self.invalid_slugs.add(slug)
+                # Optionally remove from cache (not strictly necessary, but keeps things tidy)
+                if slug in self.tokens_cache:
+                    del self.tokens_cache[slug]
+
+    def _find_next_valid_idx(self, start_idx=None):
+        """Helper to get the index of the next valid slug, or None if all are invalid."""
+        n = len(self.slugs)
+        if n == 0:
+            return None
+        idx = self.idx if start_idx is None else start_idx
+        tried = 0
+        while tried < n:
+            slug = self.slugs[idx]
+            if slug not in self.invalid_slugs:
+                return idx
+            idx = (idx + 1) % n
+            tried += 1
+        return None  # all invalid
+
+    def current_token(self):
+        """
+        Return token for current index (fetch and cache if needed).
+        Skips invalidated slugs; raises RuntimeError if all tokens are invalid.
+        """
+        with self.lock:
+            idx = self._find_next_valid_idx()
+            if idx is None:
+                raise RuntimeError("All tokens have been invalidated; no valid tokens remain.")
+            self.idx = idx
             slug = self.slugs[self.idx]
             if slug not in self.tokens_cache:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
 
     def next_token(self):
-        """Advance to next slug, fetch token, and return it."""
+        """
+        Advance to next valid slug, fetch token, and return it.
+        Skips invalidated slugs; raises RuntimeError if all tokens are invalid.
+        """
         with self.lock:
-            self.idx = (self.idx + 1) % len(self.slugs)
+            n = len(self.slugs)
+            if n == 0:
+                raise RuntimeError("No slugs configured in TokenRotator.")
+            start_idx = (self.idx + 1) % n
+            idx = self._find_next_valid_idx(start_idx=start_idx)
+            if idx is None:
+                raise RuntimeError("All tokens have been invalidated; no valid tokens remain.")
+            self.idx = idx
             slug = self.slugs[self.idx]
             if slug not in self.tokens_cache:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
 
     def num_tokens(self):
-        return len(self.slugs)
+        """Return number of valid (not invalidated) tokens remaining."""
+        with self.lock:
+            return len([slug for slug in self.slugs if slug not in self.invalid_slugs])
 
 # Expose a singleton TokenRotator for use elsewhere
 token_rotator = TokenRotator()

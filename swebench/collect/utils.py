@@ -96,7 +96,11 @@ class Repo:
                 else:
                     # Try next token
                     old_token = self.token
-                    new_token = token_rotator.next_token()
+                    try:
+                        new_token = token_rotator.next_token()
+                    except RuntimeError:
+                        logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (403).")
+                        raise
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
@@ -112,7 +116,18 @@ class Repo:
                     raise
                 else:
                     old_token = self.token
-                    new_token = token_rotator.next_token()
+                    # Invalidate this token in the rotator, then try to switch.
+                    try:
+                        token_rotator.invalidate_token(old_token)
+                        if token_rotator.num_tokens() == 0:
+                            logger.error(
+                                f"[{self.owner}/{self.name}] All tokens invalidated (401)."
+                            )
+                            raise RuntimeError("No valid tokens remain after invalidation (401).")
+                        new_token = token_rotator.current_token()
+                    except RuntimeError:
+                        logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (401).")
+                        raise
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
