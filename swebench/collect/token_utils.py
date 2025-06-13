@@ -96,16 +96,35 @@ class TokenRotator:
             return self.tokens_cache[slug]
 
     def next_token(self):
-        """Advance to next slug, fetch token, and return it."""
+        """Advance to next slug, fetch token, and return it. Raises if no tokens remain."""
         with self.lock:
+            if not self.slugs:
+                raise RuntimeError("No tokens left in TokenRotator.")
             self.idx = (self.idx + 1) % len(self.slugs)
             slug = self.slugs[self.idx]
             if slug not in self.tokens_cache:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
 
+    def invalidate_current_token(self):
+        """
+        Remove the current slug (and its token) from rotation due to 401/invalidity.
+        Adjust idx as needed.
+        """
+        with self.lock:
+            if not self.slugs:
+                return
+            slug = self.slugs[self.idx]
+            # Remove slug and its cached token
+            self.tokens_cache.pop(slug, None)
+            self.slugs.pop(self.idx)
+            # Adjust idx if needed
+            if self.idx >= len(self.slugs):
+                self.idx = 0
+
     def num_tokens(self):
-        return len(self.slugs)
+        with self.lock:
+            return len(self.slugs)
 
 # Expose a singleton TokenRotator for use elsewhere
 token_rotator = TokenRotator()

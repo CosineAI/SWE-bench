@@ -61,21 +61,20 @@ class Repo:
             values (dict): response object of `func`
         """
         # Import here to avoid circular import at module level
-        max_attempts = 1
         token_rotator = self.token_rotator
         if token_rotator is None:
             try:
                 from swebench.collect.token_utils import token_rotator as global_token_rotator
                 token_rotator = global_token_rotator
-                max_attempts = token_rotator.num_tokens()
             except Exception:
                 token_rotator = None
-        else:
-            max_attempts = token_rotator.num_tokens() if token_rotator else 1
 
         attempt = 0
         last_403 = False
-        while attempt < max_attempts:
+        while True:
+            max_attempts = token_rotator.num_tokens() if token_rotator else 1
+            if attempt >= max_attempts:
+                break
             try:
                 values = func(**kwargs)
                 return values
@@ -96,7 +95,13 @@ class Repo:
                 else:
                     # Try next token
                     old_token = self.token
-                    new_token = token_rotator.next_token()
+                    try:
+                        new_token = token_rotator.next_token()
+                    except RuntimeError:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens exhausted (403)."
+                        )
+                        return None
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
@@ -111,14 +116,21 @@ class Repo:
                     )
                     raise
                 else:
-                    old_token = self.token
-                    new_token = token_rotator.next_token()
+                    # Invalidate current token and check if any tokens remain
+                    token_rotator.invalidate_current_token()
+                    if token_rotator.num_tokens() == 0:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens exhausted (401)."
+                        )
+                        raise RuntimeError(f"[{self.owner}/{self.name}] All tokens exhausted (401).")
+                    # After invalidation, get the current token (do not rotate yet)
+                    new_token = token_rotator.current_token()
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts})."
+                        f"[{self.owner}/{self.name}] Invalidated token due to 401, using new token (attempt {attempt+1}/{max_attempts})."
                     )
-                    attempt += 1
+                    # Do not increment attempt, as we haven't rotated yet
                     continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
