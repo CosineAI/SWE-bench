@@ -52,7 +52,8 @@ class Repo:
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
-        API call wrapper with rate limit and token rotation handling.
+        API call wrapper with rate limit and token rotation handling,
+        with improved 401 handling: refresh token once, then invalidate if still 401.
 
         Args:
             func (callable): API function to call
@@ -71,10 +72,18 @@ class Repo:
 
         attempt = 0
         last_403 = False
+        attempt_401 = 0
+        refreshed_for_slug = None
+
         while True:
             max_attempts = token_rotator.num_tokens() if token_rotator else 1
             if attempt >= max_attempts:
                 break
+            slug_before = None
+            if token_rotator:
+                with token_rotator.lock:
+                    if token_rotator.slugs:
+                        slug_before = token_rotator.slugs[token_rotator.idx]
             try:
                 values = func(**kwargs)
                 return values
@@ -105,7 +114,7 @@ class Repo:
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts})."
+                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts}, slug '{slug_before}')."
                     )
                     attempt += 1
                     continue
@@ -116,8 +125,28 @@ class Repo:
                     )
                     raise
                 else:
-                    # Invalidate current token and check if any tokens remain
-                    token_rotator.invalidate_current_token()
+                    # On first 401, try to refresh the token for the *current* slug and retry once
+                    if attempt_401 == 0:
+                        logger.warning(
+                            f"[{self.owner}/{self.name}] 401 Unauthorized for slug '{slug_before}'. Attempting token refresh."
+                        )
+                        try:
+                            refreshed_token = token_rotator.refresh_current_token()
+                            self.api = GhApi(token=refreshed_token)
+                            self.token = refreshed_token
+                            refreshed_for_slug = slug_before
+                            attempt_401 += 1
+                            continue  # Retry immediately with refreshed token
+                        except Exception as e:
+                            logger.error(
+                                f"[{self.owner}/{self.name}] Failed to refresh token for slug '{slug_before}': {e}"
+                            )
+                            # If refresh fails, proceed to invalidate below
+                    # If already refreshed once (or refresh failed), invalidate slug and rotate
+                    logger.warning(
+                        f"[{self.owner}/{self.name}] 401 Unauthorized after refresh for slug '{slug_before}'. Invalidating and rotating token."
+                    )
+                    token_rotator.invalidate_current_token(slug=slug_before)
                     if token_rotator.num_tokens() == 0:
                         logger.error(
                             f"[{self.owner}/{self.name}] All tokens exhausted (401)."
@@ -125,12 +154,15 @@ class Repo:
                         raise RuntimeError(f"[{self.owner}/{self.name}] All tokens exhausted (401).")
                     # After invalidation, get the current token (do not rotate yet)
                     new_token = token_rotator.current_token()
+                    with token_rotator.lock:
+                        slugs_left = list(token_rotator.slugs)
+                        slug_now = token_rotator.slugs[token_rotator.idx] if token_rotator.slugs else None
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Invalidated token due to 401, using new token (attempt {attempt+1}/{max_attempts})."
+                        f"[{self.owner}/{self.name}] Invalidated token for slug '{slug_before}', using new token for slug '{slug_now}', {len(slugs_left)} tokens left."
                     )
-                    # Do not increment attempt, as we haven't rotated yet
+                    attempt_401 = 0  # Reset for next slug
                     continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")

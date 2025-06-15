@@ -106,18 +106,34 @@ class TokenRotator:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
 
-    def invalidate_current_token(self):
+    def refresh_current_token(self):
+        """
+        Refresh the token for the current slug (fetch a new token and update the cache).
+        Returns the refreshed token.
+        """
+        with self.lock:
+            if not self.slugs:
+                raise RuntimeError("No team slugs available to refresh token.")
+            slug = self.slugs[self.idx]
+            self.tokens_cache[slug] = self.fetch_token(slug)
+            return self.tokens_cache[slug]
+
+    def invalidate_current_token(self, slug=None):
         """
         Remove the current slug (and its token) from rotation due to 401/invalidity.
+        Accepts an optional slug param for explicit invalidation (defaults to current).
         Adjust idx as needed.
         """
         with self.lock:
             if not self.slugs:
                 return
-            slug = self.slugs[self.idx]
-            # Remove slug and its cached token
-            self.tokens_cache.pop(slug, None)
-            self.slugs.pop(self.idx)
+            if slug is not None and slug in self.slugs:
+                idx = self.slugs.index(slug)
+            else:
+                idx = self.idx
+            slug_to_remove = self.slugs[idx]
+            self.tokens_cache.pop(slug_to_remove, None)
+            self.slugs.pop(idx)
             # Adjust idx if needed
             if self.idx >= len(self.slugs):
                 self.idx = 0
