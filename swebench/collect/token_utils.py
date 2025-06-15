@@ -54,6 +54,7 @@ class TokenRotator:
     Fetches tokens on demand and caches them for the session.
     Thread-safe for concurrent use.
     Supports invalidating tokens (e.g., on 401 error) so they are not reused.
+    Provides refresh_token(slug) and refresh_current_token() to force-refresh tokens.
     """
     def __init__(self):
         team_ids = os.getenv("TEAM_IDS")
@@ -88,6 +89,31 @@ class TokenRotator:
         if not token:
             raise ValueError(f"No 'token' field in response from {url} for team '{slug}'")
         return token
+
+    def refresh_token(self, slug):
+        """
+        Force refresh the token for the given slug, updating the cache to the new value.
+        Returns the new token.
+        """
+        with self.lock:
+            token = self.fetch_token(slug)
+            self.tokens_cache[slug] = token
+            return token
+
+    def refresh_current_token(self):
+        """
+        Force refresh the token for the current slug, updating the cache.
+        Returns the new token.
+        """
+        with self.lock:
+            idx = self._find_next_valid_idx()
+            if idx is None:
+                raise RuntimeError("All tokens have been invalidated; no valid tokens remain.")
+            self.idx = idx
+            slug = self.slugs[self.idx]
+            token = self.fetch_token(slug)
+            self.tokens_cache[slug] = token
+            return token
 
     def _slug_from_token(self, token_str):
         """Find the slug corresponding to a particular token string."""

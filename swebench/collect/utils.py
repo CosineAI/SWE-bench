@@ -53,6 +53,7 @@ class Repo:
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
         API call wrapper with rate limit and token rotation handling.
+        Implements token refresh on 401 before invalidating/rotating.
 
         Args:
             func (callable): API function to call
@@ -75,6 +76,7 @@ class Repo:
 
         attempt = 0
         last_403 = False
+        refresh_attempted = False
         while attempt < max_attempts:
             try:
                 values = func(**kwargs)
@@ -114,27 +116,43 @@ class Repo:
                         f"[{self.owner}/{self.name}] Unauthorized (401) and no token rotator available."
                     )
                     raise
-                else:
-                    old_token = self.token
-                    # Invalidate this token in the rotator, then try to switch.
+                if not refresh_attempted:
+                    # Try to refresh the current token (force re-fetch from service)
                     try:
-                        token_rotator.invalidate_token(old_token)
-                        if token_rotator.num_tokens() == 0:
-                            logger.error(
-                                f"[{self.owner}/{self.name}] All tokens invalidated (401)."
-                            )
-                            raise RuntimeError("No valid tokens remain after invalidation (401).")
-                        new_token = token_rotator.current_token()
-                    except RuntimeError:
-                        logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (401).")
-                        raise
-                    self.api = GhApi(token=new_token)
-                    self.token = new_token
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts})."
-                    )
-                    attempt += 1
-                    continue
+                        new_token = token_rotator.refresh_current_token()
+                        self.api = GhApi(token=new_token)
+                        self.token = new_token
+                        refresh_attempted = True
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Refreshed token after 401, retrying..."
+                        )
+                        continue  # Retry the call with refreshed token
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.owner}/{self.name}] Token refresh failed after 401: {e}"
+                        )
+                        # Proceed to invalidate and rotate below
+                # If refresh already attempted or failed, invalidate and rotate
+                old_token = self.token
+                try:
+                    token_rotator.invalidate_token(old_token)
+                    if token_rotator.num_tokens() == 0:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens invalidated (401)."
+                        )
+                        raise RuntimeError("No valid tokens remain after invalidation (401).")
+                    new_token = token_rotator.current_token()
+                except RuntimeError:
+                    logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (401).")
+                    raise
+                self.api = GhApi(token=new_token)
+                self.token = new_token
+                logger.info(
+                    f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts}, after refresh fail/second 401)."
+                )
+                attempt += 1
+                refresh_attempted = False
+                continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
                 return None
