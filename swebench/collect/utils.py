@@ -45,9 +45,13 @@ class Repo:
         self.owner = owner
         self.name = name
         self.token = token
-        # TokenRotator instance for rotating tokens on 403 errors
         self.token_rotator = token_rotator
-        self.api = GhApi(token=token if token else (token_rotator.current_token() if token_rotator else None))
+        if token_rotator and not token:
+            self.token = token_rotator.current_token()
+            self.slug = token_rotator.current_slug()
+        else:
+            self.slug = None
+        self.api = GhApi(token=self.token)
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
@@ -75,6 +79,8 @@ class Repo:
 
         attempt = 0
         last_403 = False
+        got_401_once = False  # Track if we've already seen a 401 for this token
+
         while attempt < max_attempts:
             try:
                 values = func(**kwargs)
@@ -98,6 +104,7 @@ class Repo:
                     old_token = self.token
                     try:
                         new_token = token_rotator.next_token()
+                        self.slug = token_rotator.current_slug()
                     except RuntimeError:
                         logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (403).")
                         raise
@@ -107,6 +114,7 @@ class Repo:
                         f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts})."
                     )
                     attempt += 1
+                    got_401_once = False
                     continue
             except HTTP401UnauthorizedError:
                 if not token_rotator:
@@ -114,27 +122,50 @@ class Repo:
                         f"[{self.owner}/{self.name}] Unauthorized (401) and no token rotator available."
                     )
                     raise
-                else:
-                    old_token = self.token
-                    # Invalidate this token in the rotator, then try to switch.
+                old_token = self.token
+                # On first 401, try refreshing token for the current slug and retry
+                if not got_401_once:
                     try:
-                        token_rotator.invalidate_token(old_token)
-                        if token_rotator.num_tokens() == 0:
-                            logger.error(
-                                f"[{self.owner}/{self.name}] All tokens invalidated (401)."
+                        if hasattr(token_rotator, "refresh_token") and self.slug:
+                            refreshed_token = token_rotator.refresh_token(self.slug)
+                        elif hasattr(token_rotator, "refresh_current_token"):
+                            refreshed_token = token_rotator.refresh_current_token()
+                        else:
+                            refreshed_token = None
+                        if refreshed_token:
+                            self.api = GhApi(token=refreshed_token)
+                            self.token = refreshed_token
+                            logger.info(
+                                f"[{self.owner}/{self.name}] Refreshed token for slug '{self.slug}' after 401 (attempt {attempt+1}/{max_attempts})."
                             )
-                            raise RuntimeError("No valid tokens remain after invalidation (401).")
-                        new_token = token_rotator.current_token()
-                    except RuntimeError:
-                        logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (401).")
-                        raise
-                    self.api = GhApi(token=new_token)
-                    self.token = new_token
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts})."
-                    )
-                    attempt += 1
-                    continue
+                            got_401_once = True
+                            continue  # Retry with refreshed token, do not invalidate yet
+                    except Exception as refresh_exc:
+                        logger.warning(
+                            f"[{self.owner}/{self.name}] Token refresh failed for slug '{self.slug}': {refresh_exc}"
+                        )
+                    # If refresh fails, fall through to invalidate below
+                # If we've already refreshed, or refresh fails, invalidate and switch token
+                try:
+                    token_rotator.invalidate_token(old_token)
+                    if token_rotator.num_tokens() == 0:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens invalidated (401)."
+                        )
+                        raise RuntimeError("No valid tokens remain after invalidation (401).")
+                    new_token = token_rotator.current_token()
+                    self.slug = token_rotator.current_slug()
+                except RuntimeError:
+                    logger.error(f"[{self.owner}/{self.name}] All tokens invalidated (401).")
+                    raise
+                self.api = GhApi(token=new_token)
+                self.token = new_token
+                logger.info(
+                    f"[{self.owner}/{self.name}] Switched token due to 401 (attempt {attempt+1}/{max_attempts})."
+                )
+                attempt += 1
+                got_401_once = False
+                continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
                 return None

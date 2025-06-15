@@ -76,6 +76,8 @@ class TokenRotator:
         self.idx = 0
         self.lock = threading.Lock()
         self.invalid_slugs = set()
+        # Precompute slug -> idx mapping for convenience
+        self.slug_idx_map = {slug: i for i, slug in enumerate(self.slugs)}
 
     def fetch_token(self, slug):
         """Fetch token for a single team slug from the token service."""
@@ -140,24 +142,46 @@ class TokenRotator:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
 
-    def next_token(self):
+    def current_slug(self):
+        """Return the current slug for the current index."""
+        with self.lock:
+            idx = self._find_next_valid_idx()
+            if idx is None:
+                raise RuntimeError("All tokens have been invalidated; no valid tokens remain.")
+            self.idx = idx
+            return self.slugs[self.idx]
+
+    def refresh_current_token(self):
         """
-        Advance to next valid slug, fetch token, and return it.
-        Skips invalidated slugs; raises RuntimeError if all tokens are invalid.
+        Refresh and cache the token for the current slug/index.
+        Returns the fresh token string.
         """
         with self.lock:
-            n = len(self.slugs)
-            if n == 0:
-                raise RuntimeError("No slugs configured in TokenRotator.")
-            start_idx = (self.idx + 1) % n
-            idx = self._find_next_valid_idx(start_idx=start_idx)
+            idx = self._find_next_valid_idx()
             if idx is None:
                 raise RuntimeError("All tokens have been invalidated; no valid tokens remain.")
             self.idx = idx
             slug = self.slugs[self.idx]
-            if slug not in self.tokens_cache:
-                self.tokens_cache[slug] = self.fetch_token(slug)
-            return self.tokens_cache[slug]
+            fresh_token = self.fetch_token(slug)
+            self.tokens_cache[slug] = fresh_token
+            if slug in self.invalid_slugs:
+                self.invalid_slugs.remove(slug)
+            return fresh_token
+
+    def refresh_token(self, slug):
+        """
+        Refresh and cache the token for the given slug.
+        Un-invalidates the slug if it was invalidated.
+        Returns the fresh token string.
+        """
+        with self.lock:
+            if slug not in self.slugs:
+                raise ValueError(f"Slug '{slug}' does not exist in team slugs.")
+            fresh_token = self.fetch_token(slug)
+            self.tokens_cache[slug] = fresh_token
+            if slug in self.invalid_slugs:
+                self.invalid_slugs.remove(slug)
+            return fresh_token
 
     def num_tokens(self):
         """Return number of valid (not invalidated) tokens remaining."""
