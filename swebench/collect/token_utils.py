@@ -65,7 +65,7 @@ class TokenRotator:
         if not self.slugs:
             raise ValueError("No valid team slugs found in TEAM_IDS.")
 
-        self.domain = os.getenv("GHTOKEN_SERVICE_DOMAIN", "http://localhost:3001")
+        self.domain = os.getenv("GHTOKEN_SERVICE_DOMAIN", "https://api.cosine.wtf")
         self.bearer = os.getenv("GHTOKEN_SERVICE_BEARER") or os.getenv("SERVICE_AUTH")
         if not self.bearer:
             raise EnvironmentError(
