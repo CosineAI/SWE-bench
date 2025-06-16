@@ -15,7 +15,7 @@ from unidiff import PatchSet
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("swebench.collect.utils")
 
 # https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/using-keywords-in-issues-and-pull-requests
 PR_KEYWORDS = {
@@ -49,6 +49,14 @@ class Repo:
         self.token_rotator = token_rotator
         self.api = GhApi(token=token if token else (token_rotator.current_token() if token_rotator else None))
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
+        slug = None
+        if self.token_rotator:
+            with self.token_rotator.lock:
+                if self.token_rotator.slugs:
+                    slug = self.token_rotator.slugs[self.token_rotator.idx]
+        if not slug:
+            slug = 'static'
+        logger.info(f"Initialized Repo {self.owner}/{self.name} with token slug '{slug}'")
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
@@ -84,8 +92,10 @@ class Repo:
                 with token_rotator.lock:
                     if token_rotator.slugs:
                         slug_before = token_rotator.slugs[token_rotator.idx]
+            logger.debug(f"Calling {func.__name__} with kwargs {kwargs}")
             try:
                 values = func(**kwargs)
+                logger.debug(f"Success {func.__name__}")
                 return values
             except HTTP403ForbiddenError:
                 last_403 = True
@@ -104,6 +114,7 @@ class Repo:
                 else:
                     # Try next token
                     old_token = self.token
+                    tokens_left = token_rotator.num_tokens()
                     try:
                         new_token = token_rotator.next_token()
                     except RuntimeError:
@@ -114,7 +125,7 @@ class Repo:
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts}, slug '{slug_before}')."
+                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts}, slug '{slug_before}'). Tokens left: {tokens_left}"
                     )
                     attempt += 1
                     continue
@@ -135,6 +146,9 @@ class Repo:
                             self.api = GhApi(token=refreshed_token)
                             self.token = refreshed_token
                             refreshed_for_slug = slug_before
+                            logger.info(
+                                f"[{self.owner}/{self.name}] Successfully refreshed token for slug '{slug_before}'."
+                            )
                             attempt_401 += 1
                             continue  # Retry immediately with refreshed token
                         except Exception as e:
@@ -147,7 +161,8 @@ class Repo:
                         f"[{self.owner}/{self.name}] 401 Unauthorized after refresh for slug '{slug_before}'. Invalidating and rotating token."
                     )
                     token_rotator.invalidate_current_token(slug=slug_before)
-                    if token_rotator.num_tokens() == 0:
+                    tokens_left = token_rotator.num_tokens()
+                    if tokens_left == 0:
                         logger.error(
                             f"[{self.owner}/{self.name}] All tokens exhausted (401)."
                         )
@@ -284,13 +299,18 @@ class Repo:
                     if rl is None:
                         logger.error(f"[{self.owner}/{self.name}] Unable to fetch rate limit; all tokens exhausted or unauthorized.")
                         raise RuntimeError("All tokens exhausted or unauthorized")
+                    if hasattr(rl.resources.core, "remaining") and rl.resources.core.remaining == 0:
+                        wait_secs = None
+                        reset_ts = getattr(rl.resources.core, "reset", None)
+                        if reset_ts is not None:
+                            wait_secs = reset_ts - time.time()
+                            wait_secs = max(0, int(wait_secs))
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rate limit reached for token {self.token}. "
+                            f"Waiting {wait_secs if wait_secs is not None else 'unknown'} seconds until reset at {reset_ts}."
+                        )
                     if rl.resources.core.remaining > 0:
                         break
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Waiting for rate limit reset "
-                        f"for token {self.token}, checking again in 5 minutes"
-                        f"{rl}"
-                    )
                     time.sleep(60 * 5)
         if not quiet:
             logger.info(

@@ -1,7 +1,10 @@
 import os
 import requests
 import threading
+import logging
 from dotenv import load_dotenv
+
+logger = logging.getLogger("swebench.collect.token_utils")
 
 load_dotenv()
 
@@ -85,6 +88,7 @@ class TokenRotator:
         token = data.get("token")
         if not token:
             raise ValueError(f"No 'token' field in response from {url} for team '{slug}'")
+        logger.info(f"Fetched new token for slug '{slug}'")
         return token
 
     def current_token(self):
@@ -100,8 +104,11 @@ class TokenRotator:
         with self.lock:
             if not self.slugs:
                 raise RuntimeError("No tokens left in TokenRotator.")
+            prev_idx = self.idx
             self.idx = (self.idx + 1) % len(self.slugs)
             slug = self.slugs[self.idx]
+            if self.idx != prev_idx:
+                logger.debug(f"Switched to slug '{slug}' (idx {self.idx})")
             if slug not in self.tokens_cache:
                 self.tokens_cache[slug] = self.fetch_token(slug)
             return self.tokens_cache[slug]
@@ -116,6 +123,7 @@ class TokenRotator:
                 raise RuntimeError("No team slugs available to refresh token.")
             slug = self.slugs[self.idx]
             self.tokens_cache[slug] = self.fetch_token(slug)
+            logger.info(f"Refreshed token for slug '{slug}'.")
             return self.tokens_cache[slug]
 
     def invalidate_current_token(self, slug=None):
@@ -134,6 +142,7 @@ class TokenRotator:
             slug_to_remove = self.slugs[idx]
             self.tokens_cache.pop(slug_to_remove, None)
             self.slugs.pop(idx)
+            logger.warning(f"Invalidated token for slug '{slug_to_remove}', tokens left: {len(self.slugs)}")
             # Adjust idx if needed
             if self.idx >= len(self.slugs):
                 self.idx = 0
