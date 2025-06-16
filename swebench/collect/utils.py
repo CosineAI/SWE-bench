@@ -257,9 +257,23 @@ class Repo:
                     f"[{self.owner}/{self.name}] Error processing page {page} "
                     f"w/ token {self.token[:10]} - {e}"
                 )
+                # --- PATCH: rotate token on 401s, and patch call to use call_api for rate_limit ---
+                from fastcore.net import HTTP401UnauthorizedError  # already imported above, but safe
+
+                # Handle HTTP401UnauthorizedError for token rotation
+                if isinstance(e, HTTP401UnauthorizedError):
+                    token_rotator = getattr(self, "token_rotator", None)
+                    if token_rotator:
+                        token_rotator.invalidate_current_token()
+                        if token_rotator.num_tokens() == 0:
+                            raise
+                        self.api = GhApi(token=token_rotator.current_token())
+                        self.token = token_rotator.current_token()
+                        continue  # retry same page without incrementing
+
                 while True:
-                    rl = self.api.rate_limit.get()
-                    if rl.resources.core.remaining > 0:
+                    rl = self.call_api(self.api.rate_limit.get)
+                    if rl and rl.resources.core.remaining > 0:
                         break
                     logger.info(
                         f"[{self.owner}/{self.name}] Waiting for rate limit reset "
