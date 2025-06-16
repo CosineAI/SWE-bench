@@ -260,6 +260,10 @@ class Repo:
                 # --- PATCH: rotate token on 401s, and patch call to use call_api for rate_limit ---
                 from fastcore.net import HTTP401UnauthorizedError  # already imported above, but safe
 
+                # If RuntimeError (from all tokens exhausted or unauthorized), bubble up to skip repo
+                if isinstance(e, RuntimeError):
+                    raise
+
                 # Handle HTTP401UnauthorizedError for token rotation
                 if isinstance(e, HTTP401UnauthorizedError):
                     token_rotator = getattr(self, "token_rotator", None)
@@ -277,7 +281,10 @@ class Repo:
 
                 while True:
                     rl = self.call_api(self.api.rate_limit.get)
-                    if rl and rl.resources.core.remaining > 0:
+                    if rl is None:
+                        logger.error(f"[{self.owner}/{self.name}] Unable to fetch rate limit; all tokens exhausted or unauthorized.")
+                        raise RuntimeError("All tokens exhausted or unauthorized")
+                    if rl.resources.core.remaining > 0:
                         break
                     logger.info(
                         f"[{self.owner}/{self.name}] Waiting for rate limit reset "
