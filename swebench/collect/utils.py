@@ -269,6 +269,10 @@ class Repo:
                             raise
                         self.api = GhApi(token=token_rotator.current_token())
                         self.token = token_rotator.current_token()
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rotated token due to 401 Unauthorized. "
+                            f"New token: {self.token}..."
+                        )
                         continue  # retry same page without incrementing
 
                 while True:
@@ -277,7 +281,8 @@ class Repo:
                         break
                     logger.info(
                         f"[{self.owner}/{self.name}] Waiting for rate limit reset "
-                        f"for token {self.token[:10]}, checking again in 5 minutes"
+                        f"for token {self.token}, checking again in 5 minutes"
+                        f"{rl}"
                     )
                     time.sleep(60 * 5)
         if not quiet:
