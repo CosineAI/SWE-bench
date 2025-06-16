@@ -42,12 +42,24 @@ class Repo:
             token (str): github token (optional if using token rotation)
             token_rotator: TokenRotator instance (optional)
         """
+        # Always attach global token_rotator if none provided
+        if token_rotator is None:
+            try:
+                from swebench.collect.token_utils import token_rotator as global_token_rotator
+                token_rotator = global_token_rotator
+            except Exception:
+                token_rotator = None
+        self.token_rotator = token_rotator
+
         self.owner = owner
         self.name = name
+
+        # Choose token: only use token_rotator if token is None and token_rotator is present
+        if token is None and self.token_rotator:
+            token = self.token_rotator.current_token()
         self.token = token
-        # TokenRotator instance for rotating tokens on 403 errors
-        self.token_rotator = token_rotator
-        self.api = GhApi(token=token if token else (token_rotator.current_token() if token_rotator else None))
+        self.api = GhApi(token=token)
+
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
         slug = None
         if self.token_rotator:
@@ -280,8 +292,8 @@ class Repo:
                     raise
 
                 # Handle HTTP401UnauthorizedError for token rotation
+                token_rotator = self.token_rotator  # Use self.token_rotator directly (patched)
                 if isinstance(e, HTTP401UnauthorizedError):
-                    token_rotator = getattr(self, "token_rotator", None)
                     if token_rotator:
                         token_rotator.invalidate_current_token()
                         if token_rotator.num_tokens() == 0:
