@@ -8,14 +8,14 @@ import time
 
 from bs4 import BeautifulSoup
 from ghapi.core import GhApi
-from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError
+from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError, HTTP401UnauthorizedError
 from typing import Callable, Iterator, Optional
 from unidiff import PatchSet
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("swebench.collect.utils")
 
 # https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/using-keywords-in-issues-and-pull-requests
 PR_KEYWORDS = {
@@ -32,24 +32,47 @@ PR_KEYWORDS = {
 
 
 class Repo:
-    def __init__(self, owner: str, name: str, token: Optional[str] = None):
+    def __init__(self, owner: str, name: str, token: Optional[str] = None, token_rotator=None):
         """
         Init to retrieve target repository and create ghapi tool
 
         Args:
             owner (str): owner of target repository
             name (str): name of target repository
-            token (str): github token
+            token (str): github token (optional if using token rotation)
+            token_rotator: TokenRotator instance (optional)
         """
+        # Always attach global token_rotator if none provided
+        if token_rotator is None:
+            try:
+                from swebench.collect.token_utils import token_rotator as global_token_rotator
+                token_rotator = global_token_rotator
+            except Exception:
+                token_rotator = None
+        self.token_rotator = token_rotator
+
         self.owner = owner
         self.name = name
+
+        token = self.token_rotator.current_token()
         self.token = token
+        logger.info(f"Using token rotator to get token for {owner}/{name} - {token}")
         self.api = GhApi(token=token)
+
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
+        slug = None
+        if self.token_rotator:
+            with self.token_rotator.lock:
+                if self.token_rotator.slugs:
+                    slug = self.token_rotator.slugs[self.token_rotator.idx]
+        if not slug:
+            slug = 'static'
+        logger.info(f"Initialized Repo {self.owner}/{self.name} with token slug '{slug}'")
 
     def call_api(self, func: Callable, **kwargs) -> dict | None:
         """
-        API call wrapper with rate limit handling (checks every 5 minutes if rate limit is reset)
+        API call wrapper with rate limit and token rotation handling,
+        with improved 401 handling: refresh token once, then invalidate if still 401.
 
         Args:
             func (callable): API function to call
@@ -57,23 +80,128 @@ class Repo:
         Return:
             values (dict): response object of `func`
         """
+        # Import here to avoid circular import at module level
+        token_rotator = self.token_rotator
+        if token_rotator is None:
+            try:
+                from swebench.collect.token_utils import token_rotator as global_token_rotator
+                token_rotator = global_token_rotator
+            except Exception:
+                token_rotator = None
+
+        attempt = 0
+        last_403 = False
+        attempt_401 = 0
+        refreshed_for_slug = None
+
         while True:
+            max_attempts = token_rotator.num_tokens() if token_rotator else 1
+            if attempt >= max_attempts:
+                break
+            slug_before = None
+            if token_rotator:
+                with token_rotator.lock:
+                    if token_rotator.slugs:
+                        slug_before = token_rotator.slugs[token_rotator.idx]
+            logger.debug(f"Calling {func} with kwargs {kwargs}")
             try:
                 values = func(**kwargs)
+                logger.debug(f"Success {func}")
                 return values
             except HTTP403ForbiddenError:
-                while True:
-                    rl = self.api.rate_limit.get()
+                last_403 = True
+                if not token_rotator:
+                    # Fall back to old behavior: wait for rate limit
+                    while True:
+                        rl = self.api.rate_limit.get()
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rate limit exceeded for token {str(self.token)[:10]}, "
+                            f"waiting for 5 minutes, remaining calls: {rl.resources.core.remaining}"
+                        )
+                        if rl.resources.core.remaining > 0:
+                            break
+                        time.sleep(60 * 5)
+                    continue
+                else:
+                    # Try next token
+                    old_token = self.token
+                    tokens_left = token_rotator.num_tokens()
+                    try:
+                        new_token = token_rotator.next_token()
+                    except RuntimeError:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens exhausted (403)."
+                        )
+                        return None
+                    self.api = GhApi(token=new_token)
+                    self.token = new_token
                     logger.info(
-                        f"[{self.owner}/{self.name}] Rate limit exceeded for token {self.token[:10]}, "
-                        f"waiting for 5 minutes, remaining calls: {rl.resources.core.remaining}"
+                        f"[{self.owner}/{self.name}] Switched token due to 403 (attempt {attempt+1}/{max_attempts}, slug '{slug_before}'). Tokens left: {tokens_left}"
                     )
-                    if rl.resources.core.remaining > 0:
-                        break
-                    time.sleep(60 * 5)
+                    attempt += 1
+                    continue
+            except HTTP401UnauthorizedError:
+                if not token_rotator:
+                    logger.error(
+                        f"[{self.owner}/{self.name}] Unauthorized (401) and no token rotator available."
+                    )
+                    raise
+                else:
+                    # On first 401, try to refresh the token for the *current* slug and retry once
+                    if attempt_401 == 0:
+                        logger.warning(
+                            f"[{self.owner}/{self.name}] 401 Unauthorized for slug '{slug_before}'. Attempting token refresh."
+                        )
+                        try:
+                            refreshed_token = token_rotator.refresh_current_token()
+                            self.api = GhApi(token=refreshed_token)
+                            self.token = refreshed_token
+                            refreshed_for_slug = slug_before
+                            logger.info(
+                                f"[{self.owner}/{self.name}] Successfully refreshed token for slug '{slug_before}'."
+                            )
+                            attempt_401 += 1
+                            continue  # Retry immediately with refreshed token
+                        except Exception as e:
+                            logger.error(
+                                f"[{self.owner}/{self.name}] Failed to refresh token for slug '{slug_before}': {e}"
+                            )
+                            # If refresh fails, proceed to invalidate below
+                    # If already refreshed once (or refresh failed), invalidate slug and rotate
+                    logger.warning(
+                        f"[{self.owner}/{self.name}] 401 Unauthorized after refresh for slug '{slug_before}'. Invalidating and rotating token."
+                    )
+                    token_rotator.invalidate_current_token(slug=slug_before)
+                    tokens_left = token_rotator.num_tokens()
+                    if tokens_left == 0:
+                        logger.error(
+                            f"[{self.owner}/{self.name}] All tokens exhausted (401)."
+                        )
+                        raise RuntimeError(f"[{self.owner}/{self.name}] All tokens exhausted (401).")
+                    # After invalidation, get the current token (do not rotate yet)
+                    new_token = token_rotator.current_token()
+                    with token_rotator.lock:
+                        slugs_left = list(token_rotator.slugs)
+                        slug_now = token_rotator.slugs[token_rotator.idx] if token_rotator.slugs else None
+                    self.api = GhApi(token=new_token)
+                    self.token = new_token
+                    logger.info(
+                        f"[{self.owner}/{self.name}] Invalidated token for slug '{slug_before}', using new token for slug '{slug_now}', {len(slugs_left)} tokens left."
+                    )
+                    attempt_401 = 0  # Reset for next slug
+                    continue
             except HTTP404NotFoundError:
                 logger.info(f"[{self.owner}/{self.name}] Resource not found {kwargs}")
                 return None
+            except Exception as e:
+                logger.error(f"[{self.owner}/{self.name}] Unhandled error in call_api: {e}")
+                raise
+        # If we reach here, all tokens exhausted or repeated rate limit
+        if last_403 and token_rotator:
+            logger.error(
+                f"[{self.owner}/{self.name}] All tokens exhausted (403)."
+            )
+        return None
 
     def extract_resolved_issues(self, pull: dict) -> list[str]:
         """
@@ -155,14 +283,45 @@ class Repo:
                     f"[{self.owner}/{self.name}] Error processing page {page} "
                     f"w/ token {self.token[:10]} - {e}"
                 )
+                # --- PATCH: rotate token on 401s, and patch call to use call_api for rate_limit ---
+                from fastcore.net import HTTP401UnauthorizedError  # already imported above, but safe
+
+                # If RuntimeError (from all tokens exhausted or unauthorized), bubble up to skip repo
+                if isinstance(e, RuntimeError):
+                    raise
+
+                # Handle HTTP401UnauthorizedError for token rotation
+                token_rotator = self.token_rotator  # Use self.token_rotator directly (patched)
+                if isinstance(e, HTTP401UnauthorizedError):
+                    if token_rotator:
+                        token_rotator.invalidate_current_token()
+                        if token_rotator.num_tokens() == 0:
+                            raise
+                        self.api = GhApi(token=token_rotator.current_token())
+                        self.token = token_rotator.current_token()
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rotated token due to 401 Unauthorized. "
+                            f"New token: {self.token}..."
+                        )
+                        continue  # retry same page without incrementing
+
                 while True:
-                    rl = self.api.rate_limit.get()
+                    rl = self.call_api(self.api.rate_limit.get)
+                    if rl is None:
+                        logger.error(f"[{self.owner}/{self.name}] Unable to fetch rate limit; all tokens exhausted or unauthorized.")
+                        raise RuntimeError("All tokens exhausted or unauthorized")
+                    if hasattr(rl.resources.core, "remaining") and rl.resources.core.remaining == 0:
+                        wait_secs = None
+                        reset_ts = getattr(rl.resources.core, "reset", None)
+                        if reset_ts is not None:
+                            wait_secs = reset_ts - time.time()
+                            wait_secs = max(0, int(wait_secs))
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Rate limit reached for token {self.token}. "
+                            f"Waiting {wait_secs if wait_secs is not None else 'unknown'} seconds until reset at {reset_ts}."
+                        )
                     if rl.resources.core.remaining > 0:
                         break
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Waiting for rate limit reset "
-                        f"for token {self.token[:10]}, checking again in 5 minutes"
-                    )
                     time.sleep(60 * 5)
         if not quiet:
             logger.info(
@@ -324,9 +483,8 @@ def extract_patches(pull: dict, repo: Repo) -> tuple[str, str]:
     patch_test = ""
     patch_fix = ""
     for hunk in PatchSet(patch):
-        if any(
-            test_word in hunk.path for test_word in ["test", "tests", "e2e", "testing"]
-        ):
+        path_lower = hunk.path.lower()
+        if any(word in path_lower for word in ("test", "tests", "e2e", "testing")):
             patch_test += str(hunk)
         else:
             patch_fix += str(hunk)

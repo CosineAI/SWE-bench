@@ -114,7 +114,21 @@ Additionally, you can also:
 * [Train](https://github.com/swe-bench/SWE-bench/tree/main/swebench/inference/make_datasets) your own models on our pre-processed datasets. (🆕 Check out [SWE-smith](https://swesmith.com/), a dedicated toolkit for creating SWE training data.)
 * Run [inference](docs/reference/inference.md) on existing models (both local and API models). The inference step is where you give the model a repo + issue and have it generate a fix.
 *  Run SWE-bench's [data collection procedure](https://github.com/swe-bench/SWE-bench/blob/main/swebench/collect/) ([tutorial](docs/guides/collection.md)) on your own repositories, to make new SWE-Bench tasks.
-    * ⚠️ We are temporarily pausing support for queries around creating SWE-bench instances. Please see the note in the tutorial.
+        * ⚠️ We are temporarily pausing support for queries around creating SWE-bench instances. Please see the note in the tutorial.
+
+### Repo Auto-Discovery Recency Filtering
+
+When using language-driven repo selection (e.g., `--languages python`), you may optionally filter for repositories updated recently via the `--recency_months N` (alias: `--months N`) flag. This will only include repositories pushed within the last N months (approximate, 30*N days).
+
+Example:
+```bash
+python swebench/collect/get_tasks_pipeline.py \
+    --languages python \
+    --max_repos_per_language 20 \
+    --recency_months 6 \
+    --path_prs '<path to folder to save PRs to>' \
+    --path_tasks '<path to folder to save tasks to>'
+```
 
 ## ⬇️ Downloads
 | Datasets | Models | RAG |

@@ -104,7 +104,7 @@ def main(
     if token is None:
         token = os.environ.get("GITHUB_TOKEN")
     owner, repo = repo_name.split("/")
-    repo = Repo(owner, repo, token=token)
+    repo = Repo(owner, repo)
     
     if pull_number is not None:
         log_single_pull(repo, pull_number, output)

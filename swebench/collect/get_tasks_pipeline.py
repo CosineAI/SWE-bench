@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 from multiprocessing import Pool
 from swebench.collect.build_dataset import main as build_dataset
 from swebench.collect.print_pulls import main as print_pulls
-
+from swebench.collect.get_top_repos import get_top_repos_by_language
+from ghapi.core import GhApi
+from swebench.collect.token_utils import get_tokens
 
 load_dotenv()
 
@@ -95,11 +97,13 @@ def construct_data_files(data: dict):
 
 
 def main(
-    repos: list,
-    path_prs: str,
-    path_tasks: str,
+    repos: list = None,
+    path_prs: str = None,
+    path_tasks: str = None,
     max_pulls: int = None,
     cutoff_date: str = None,
+    languages: list = None,
+    max_repos_per_language: int = 50,
 ):
     """
     Spawns multiple threads given multiple GitHub tokens for collecting fine tuning data
@@ -109,25 +113,70 @@ def main(
         path_prs (str): Path to save PR data files to
         path_tasks (str): Path to save task instance data files to
         cutoff_date (str): Cutoff date for PRs to consider in format YYYYMMDD
+        languages (list): List of language names (optional)
+        max_repos_per_language (int): Max repos to collect per language (optional)
     """
-    path_prs, path_tasks = os.path.abspath(path_prs), os.path.abspath(path_tasks)
-    print(f"Will save PR data to {path_prs}")
-    print(f"Will save task instance data to {path_tasks}")
-    print(f"Received following repos to create task instances for: {repos}")
+    # Gather repos via languages if necessary
+    all_repos = set()
+    # Handle explicit repos from CLI
+    if repos:
+        # Accept comma-separated string or list
+        if isinstance(repos, str):
+            repos = [r.strip() for r in repos.split(",")]
+        for repo in repos:
+            if repo:
+                all_repos.add(repo.strip(",").strip())
 
-    tokens = os.getenv("GITHUB_TOKENS")
+    # Handle language-based repo fetching
+    if languages:
+        # Accept comma-separated string or list
+        if isinstance(languages, str):
+            languages = [l.strip() for l in languages.split(",")]  # noqa: E741
+        # Get GitHub tokens for GhApi (use first token)
+        tokens = get_tokens()
+        if not tokens:
+            raise Exception(
+                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
+            )
+        gh_token = tokens[0].strip()
+        api = GhApi(token=gh_token)
+        for lang in languages:
+            try:
+                top_repos = get_top_repos_by_language(lang, max_repos_per_language, api)
+                for repo in top_repos:
+                    all_repos.add(repo)
+            except Exception as e:
+                print(f"Error getting repos for language '{lang}': {e}")
+
+    if not all_repos:
+        raise Exception(
+            "No repositories provided or discovered. Use --repos and/or --languages."
+        )
+
+    all_repos = sorted(all_repos)
+    print(f"Summary: {len(all_repos)} total repositories selected for processing.")
+    if languages:
+        print("Languages used: ", ", ".join(languages))
+    print("Repositories:")
+    for repo in all_repos:
+        print(f" - {repo}")
+
+    path_prs_abs, path_tasks_abs = os.path.abspath(path_prs), os.path.abspath(path_tasks)
+    print(f"Will save PR data to {path_prs_abs}")
+    print(f"Will save task instance data to {path_tasks_abs}")
+
+    tokens = get_tokens()
     if not tokens:
         raise Exception(
-            "Missing GITHUB_TOKENS, consider rerunning with GITHUB_TOKENS=$(gh auth token)"
+            "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
         )
-    tokens = tokens.split(",")
-    data_task_lists = split_instances(repos, len(tokens))
+    data_task_lists = split_instances(all_repos, len(tokens))
 
     data_pooled = [
         {
             "repos": repos,
-            "path_prs": path_prs,
-            "path_tasks": path_tasks,
+            "path_prs": path_prs_abs,
+            "path_tasks": path_tasks_abs,
             "max_pulls": max_pulls,
             "cutoff_date": cutoff_date,
             "token": token,
@@ -147,6 +196,18 @@ if __name__ == "__main__":
         help="List of repositories (e.g., `sqlfluff/sqlfluff`) to create task instances for",
     )
     parser.add_argument(
+        "--languages",
+        nargs="+",
+        help="Programming language(s) to fetch top GitHub repos for (e.g., --languages python javascript go)",
+        default=None,
+    )
+    parser.add_argument(
+        "--max_repos_per_language",
+        type=int,
+        help="Max repos to fetch for each language (default: 50)",
+        default=50,
+    )
+    parser.add_argument(
         "--path_prs", type=str, help="Path to folder to save PR data files to"
     )
     parser.add_argument(
@@ -163,5 +224,107 @@ if __name__ == "__main__":
         help="Cutoff date for PRs to consider in format YYYYMMDD",
         default=None,
     )
+    parser.add_argument(
+        "--recency_months", "--months",
+        type=int,
+        default=None,
+        help="(Optional) Only include repositories pushed within the last N months (approximate, 30*N days).",
+    )
     args = parser.parse_args()
-    main(**vars(args))
+
+    # Calculate repo cutoff if recency_months is set
+    repo_cutoff_date = None
+    if args.recency_months is not None:
+        from datetime import datetime, timedelta
+        repo_cutoff_date = (datetime.utcnow() - timedelta(days=30 * args.recency_months)).strftime("%Y-%m-%d")
+
+    # Patch main call to pass the cutoff to language-based repo discovery
+    def main_with_recency(
+        repos: list = None,
+        path_prs: str = None,
+        path_tasks: str = None,
+        max_pulls: int = None,
+        cutoff_date: str = None,
+        languages: list = None,
+        max_repos_per_language: int = 50,
+    ):
+        all_repos = set()
+        if repos:
+            if isinstance(repos, str):
+                repos = [r.strip() for r in repos.split(",")]
+            for repo in repos:
+                if repo:
+                    all_repos.add(repo.strip(",").strip())
+
+        if languages:
+            if isinstance(languages, str):
+                languages = [l.strip() for l in languages.split(",")]  # noqa: E741
+            tokens = get_tokens()
+            if not tokens:
+                raise Exception(
+                    "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
+                )
+            gh_token = tokens[0].strip()
+            api = GhApi(token=gh_token)
+            for lang in languages:
+                try:
+                    # Pass repo_cutoff_date as pushed_after if set
+                    from swebench.collect.get_top_repos import get_top_repos_by_language
+                    top_repos = get_top_repos_by_language(
+                        lang, max_repos_per_language, api, pushed_after=repo_cutoff_date
+                    )
+                    for repo in top_repos:
+                        all_repos.add(repo)
+                except Exception as e:
+                    print(f"Error getting repos for language '{lang}': {e}")
+
+        if not all_repos:
+            raise Exception(
+                "No repositories provided or discovered. Use --repos and/or --languages."
+            )
+
+        all_repos_sorted = sorted(all_repos)
+        print(f"Summary: {len(all_repos_sorted)} total repositories selected for processing.")
+        if languages:
+            print("Languages used: ", ", ".join(languages))
+        print("Repositories:")
+        for repo in all_repos_sorted:
+            print(f" - {repo}")
+
+        path_prs_abs, path_tasks_abs = os.path.abspath(path_prs), os.path.abspath(path_tasks)
+        print(f"Will save PR data to {path_prs_abs}")
+        print(f"Will save task instance data to {path_tasks_abs}")
+
+        tokens = get_tokens()
+        if not tokens:
+            raise Exception(
+                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
+            )
+        data_task_lists = split_instances(all_repos_sorted, len(tokens))
+
+        data_pooled = [
+            {
+                "repos": repos,
+                "path_prs": path_prs_abs,
+                "path_tasks": path_tasks_abs,
+                "max_pulls": max_pulls,
+                "cutoff_date": cutoff_date,
+                "token": token,
+            }
+            for repos, token in zip(data_task_lists, tokens)
+        ]
+
+        from multiprocessing import Pool
+        with Pool(len(tokens)) as p:
+            p.map(construct_data_files, data_pooled)
+
+    # Replace call to main with enhanced version
+    main_with_recency(
+        repos=args.repos,
+        path_prs=args.path_prs,
+        path_tasks=args.path_tasks,
+        max_pulls=args.max_pulls,
+        cutoff_date=args.cutoff_date,
+        languages=args.languages,
+        max_repos_per_language=args.max_repos_per_language,
+    )
