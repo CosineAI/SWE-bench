@@ -110,7 +110,7 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
     def load_repo(repo_name):
         # Return repo object for a given repo name
         owner, repo = repo_name.split("/")
-        return Repo(owner, repo, token=token)
+        return Repo(owner, repo)
 
     repos = dict()
     completed = 0

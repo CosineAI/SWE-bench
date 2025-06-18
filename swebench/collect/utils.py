@@ -54,10 +54,9 @@ class Repo:
         self.owner = owner
         self.name = name
 
-        # Choose token: only use token_rotator if token is None and token_rotator is present
-        if token is None and self.token_rotator:
-            token = self.token_rotator.current_token()
+        token = self.token_rotator.current_token()
         self.token = token
+        logger.info(f"Using token rotator to get token for {owner}/{name} - {token}")
         self.api = GhApi(token=token)
 
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
@@ -104,10 +103,10 @@ class Repo:
                 with token_rotator.lock:
                     if token_rotator.slugs:
                         slug_before = token_rotator.slugs[token_rotator.idx]
-            logger.debug(f"Calling {func.__name__} with kwargs {kwargs}")
+            logger.debug(f"Calling {func} with kwargs {kwargs}")
             try:
                 values = func(**kwargs)
-                logger.debug(f"Success {func.__name__}")
+                logger.debug(f"Success {func}")
                 return values
             except HTTP403ForbiddenError:
                 last_403 = True
