@@ -116,6 +116,19 @@ def main(
         languages (list): List of language names (optional)
         max_repos_per_language (int): Max repos to collect per language (optional)
     """
+    # Convert paths to absolute paths and create directories if they don't exist
+    if path_prs:
+        path_prs_abs = os.path.abspath(path_prs)
+        os.makedirs(path_prs_abs, exist_ok=True)
+    else:
+        path_prs_abs = None
+        
+    if path_tasks:
+        path_tasks_abs = os.path.abspath(path_tasks)
+        os.makedirs(path_tasks_abs, exist_ok=True)
+    else:
+        path_tasks_abs = None
+
     # Gather repos via languages if necessary
     all_repos = set()
     # Handle explicit repos from CLI
@@ -205,15 +218,24 @@ if __name__ == "__main__":
         "--max_repos_per_language",
         type=int,
         help="Max repos to fetch for each language (default: 50)",
-        default=50,
+        default=10,
     )
+    # Set default paths relative to the script location
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    default_prs = os.path.join(script_dir, "../../data/prs")
+    default_tasks = os.path.join(script_dir, "../../data/tasks")
+    
     parser.add_argument(
-        "--path_prs", type=str, help="Path to folder to save PR data files to"
+        "--path_prs", 
+        type=str, 
+        default=default_prs,
+        help=f"Path to folder to save PR data files to (default: {default_prs})"
     )
     parser.add_argument(
         "--path_tasks",
         type=str,
-        help="Path to folder to save task instance data files to",
+        default=default_tasks,
+        help=f"Path to folder to save task instance data files to (default: {default_tasks})",
     )
     parser.add_argument(
         "--max_pulls", type=int, help="Maximum number of pulls to log", default=None

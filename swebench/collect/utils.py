@@ -75,7 +75,7 @@ class Repo:
         with improved 401 handling: refresh token once, then invalidate if still 401.
 
         Args:
-            func (callable): API function to call
+            func (callable): API function to call (note: this will be reconstructed after token rotation)
             **kwargs: keyword arguments to pass to API function
         Return:
             values (dict): response object of `func`
@@ -88,6 +88,38 @@ class Repo:
                 token_rotator = global_token_rotator
             except Exception:
                 token_rotator = None
+
+        # Store the original function details for reconstruction after token rotation
+        original_func = func
+        func_path = None
+        
+        # Check if this is a ghapi _GhVerb object and extract the path info
+        if hasattr(func, 'path') and hasattr(func, 'name'):
+            # This is a ghapi _GhVerb object like api.repos.get
+            # Find the path: repos.get
+            for attr_name in dir(self.api):
+                if attr_name.startswith('_'):
+                    continue
+                try:
+                    attr_obj = getattr(self.api, attr_name)
+                    if hasattr(attr_obj, func.name) and getattr(attr_obj, func.name).path == func.path:
+                        func_path = f"{attr_name}.{func.name}"
+                        break
+                except:
+                    continue
+
+        def get_current_func():
+            """Get the function using the current self.api instance."""
+            if func_path:
+                # Reconstruct the method path using current API
+                parts = func_path.split('.')
+                current_func = self.api
+                for part in parts:
+                    current_func = getattr(current_func, part)
+                return current_func
+            else:
+                # Fall back to original function (might be stale after token rotation)
+                return original_func
 
         attempt = 0
         last_403 = False
@@ -103,10 +135,13 @@ class Repo:
                 with token_rotator.lock:
                     if token_rotator.slugs:
                         slug_before = token_rotator.slugs[token_rotator.idx]
-            logger.debug(f"Calling {func} with kwargs {kwargs}")
+            
+            # Always use the current API instance
+            current_func = get_current_func()
+            logger.debug(f"Calling {current_func} with kwargs {kwargs}")
             try:
-                values = func(**kwargs)
-                logger.debug(f"Success {func}")
+                values = current_func(**kwargs)
+                logger.debug(f"Success {current_func}")
                 return values
             except HTTP403ForbiddenError:
                 last_403 = True
@@ -133,6 +168,7 @@ class Repo:
                             f"[{self.owner}/{self.name}] All tokens exhausted (403)."
                         )
                         return None
+                    # Update the instance's api/token
                     self.api = GhApi(token=new_token)
                     self.token = new_token
                     logger.info(
@@ -263,66 +299,34 @@ class Repo:
         }
         while True:
             try:
-                # Get values from API call
-                values = func(**args, page=page)
+                # Get values from API call - use call_api for proper token rotation support
+                values = self.call_api(func, **args, page=page)
+                if values is None:
+                    break
                 yield from values
                 if len(values) == 0:
                     break
                 if not quiet:
-                    rl = self.api.rate_limit.get()
-                    logger.info(
-                        f"[{self.owner}/{self.name}] Processed page {page} ({per_page} values per page). "
-                        f"Remaining calls: {rl.resources.core.remaining}"
-                    )
+                    rl = self.call_api(self.api.rate_limit.get)
+                    if rl is not None:
+                        logger.info(
+                            f"[{self.owner}/{self.name}] Processed page {page} ({per_page} values per page). "
+                            f"Remaining calls: {rl.resources.core.remaining}"
+                        )
                 if num_pages is not None and page >= num_pages:
                     break
                 page += 1
             except Exception as e:
-                # Rate limit handling
-                logger.error(
-                    f"[{self.owner}/{self.name}] Error processing page {page} "
-                    f"w/ token {self.token[:10]} - {e}"
-                )
-                # --- PATCH: rotate token on 401s, and patch call to use call_api for rate_limit ---
-                from fastcore.net import HTTP401UnauthorizedError  # already imported above, but safe
-
-                # If RuntimeError (from all tokens exhausted or unauthorized), bubble up to skip repo
+                # If call_api returns None or raises RuntimeError, it means all tokens are exhausted
                 if isinstance(e, RuntimeError):
-                    raise
-
-                # Handle HTTP401UnauthorizedError for token rotation
-                token_rotator = self.token_rotator  # Use self.token_rotator directly (patched)
-                if isinstance(e, HTTP401UnauthorizedError):
-                    if token_rotator:
-                        token_rotator.invalidate_current_token()
-                        if token_rotator.num_tokens() == 0:
-                            raise
-                        self.api = GhApi(token=token_rotator.current_token())
-                        self.token = token_rotator.current_token()
-                        logger.info(
-                            f"[{self.owner}/{self.name}] Rotated token due to 401 Unauthorized. "
-                            f"New token: {self.token}..."
-                        )
-                        continue  # retry same page without incrementing
-
-                while True:
-                    rl = self.call_api(self.api.rate_limit.get)
-                    if rl is None:
-                        logger.error(f"[{self.owner}/{self.name}] Unable to fetch rate limit; all tokens exhausted or unauthorized.")
-                        raise RuntimeError("All tokens exhausted or unauthorized")
-                    if hasattr(rl.resources.core, "remaining") and rl.resources.core.remaining == 0:
-                        wait_secs = None
-                        reset_ts = getattr(rl.resources.core, "reset", None)
-                        if reset_ts is not None:
-                            wait_secs = reset_ts - time.time()
-                            wait_secs = max(0, int(wait_secs))
-                        logger.info(
-                            f"[{self.owner}/{self.name}] Rate limit reached for token {self.token}. "
-                            f"Waiting {wait_secs if wait_secs is not None else 'unknown'} seconds until reset at {reset_ts}."
-                        )
-                    if rl.resources.core.remaining > 0:
-                        break
-                    time.sleep(60 * 5)
+                    logger.error(f"[{self.owner}/{self.name}] All tokens exhausted, stopping pagination")
+                    break
+                    
+                # For other errors, log and break
+                logger.error(
+                    f"[{self.owner}/{self.name}] Error processing page {page}: {e}"
+                )
+                break
         if not quiet:
             logger.info(
                 f"[{self.owner}/{self.name}] Processed {(page - 1) * per_page + len(values)} values"

@@ -112,6 +112,11 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
         owner, repo = repo_name.split("/")
         return Repo(owner, repo)
 
+    # Ensure output directory exists
+    output_dir = os.path.dirname(os.path.abspath(output))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     repos = dict()
     completed = 0
     with_tests = 0

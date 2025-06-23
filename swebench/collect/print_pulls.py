@@ -33,6 +33,11 @@ def log_all_pulls(
         repo (Repo): repository object
         output (str): output file name
     """
+    # Ensure output directory exists
+    output_dir = os.path.dirname(os.path.abspath(output))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     cutoff_date = (
         datetime.strptime(cutoff_date, "%Y%m%d").strftime("%Y-%m-%dT%H:%M:%SZ")
         if cutoff_date is not None
