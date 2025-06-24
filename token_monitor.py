@@ -235,7 +235,7 @@ def check_token_rotator():
         logger.exception("Error initializing token rotator")
         return False
                 
-def dashboard(refresh_interval=5):
+def dashboard(refresh_interval=2):
     """
     Live dashboard to monitor GitHub token rate limits.
     Press Ctrl+C to exit.
@@ -313,9 +313,18 @@ def dashboard(refresh_interval=5):
             padding=(1, 2)
         )
         
-        with Live(panel, refresh_per_second=1, console=console, screen=True) as live:
+        with Live(refresh_per_second=1, console=console, screen=True) as live:
             while True:
-                live.update(panel)
+                # Create a new panel with fresh data on each iteration
+                tokens = get_all_tokens()
+                if tokens:
+                    new_panel = Panel(
+                        make_table(),
+                        title="GitHub Token Monitor - Press Ctrl+C to exit",
+                        border_style="blue",
+                        padding=(1, 2)
+                    )
+                    live.update(new_panel)
                 time.sleep(refresh_interval)
                 
     except KeyboardInterrupt:
@@ -334,6 +343,11 @@ def main():
         "--dashboard", 
         action="store_true", 
         help="Show live dashboard with token usage information"
+    )
+    parser.add_argument(
+        "--rotator", 
+        action="store_true", 
+        help="Test token rotator functionality"
     )
     parser.add_argument(
         "--interval", 
@@ -358,6 +372,11 @@ def main():
     # If dashboard mode is requested
     if args.dashboard:
         dashboard(refresh_interval=args.interval)
+        return
+    
+    # If rotator test is requested
+    if args.rotator:
+        check_token_rotator()
         return
     
     console = Console()

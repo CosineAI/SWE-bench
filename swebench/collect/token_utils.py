@@ -153,28 +153,42 @@ class TokenRotator:
 
 def get_github_token():
     """
-    Get all available GitHub tokens, combining direct token and token service tokens.
+    Get all available GitHub tokens from multiple sources in this order:
+    1. GITHUB_TOKENS (comma-separated list)
+    2. GITHUB_TOKEN (single token)
+    3. Token service (via get_tokens() if TEAM_IDS is set)
     
     Returns:
-        list: List of GitHub tokens (direct token first if available, then token service tokens)
+        list: List of unique GitHub tokens
     """
     tokens = []
+    seen = set()
     
-    # Add direct token if available
-    direct_token = os.getenv("GITHUB_TOKEN")
-    if direct_token and direct_token.strip():
-        tokens.append(direct_token.strip())
+    # Add tokens from GITHUB_TOKENS if available
+    if tokens_env := os.getenv("GITHUB_TOKENS"):
+        new_tokens = [t.strip() for t in tokens_env.split(",") if t.strip()]
+        tokens.extend(new_tokens)
+        seen.update(new_tokens)
     
-    # Add tokens from token service if available
-    try:
-        service_tokens = get_tokens()
-        tokens.extend(service_tokens)
-    except Exception as e:
-        logger.warning(f"Could not get tokens from token service: {e}")
+    # Add direct token if available and not already in the list
+    if direct_token := os.getenv("GITHUB_TOKEN"):
+        direct_token = direct_token.strip()
+        if direct_token and direct_token not in seen:
+            tokens.append(direct_token)
+            seen.add(direct_token)
+    
+    # Add tokens from token service if TEAM_IDS is set
+    if os.getenv("TEAM_IDS"):
+        try:
+            service_tokens = [t for t in get_tokens() if t not in seen]
+            tokens.extend(service_tokens)
+            seen.update(service_tokens)
+        except Exception as e:
+            logger.warning(f"Could not get tokens from token service: {e}")
     
     if not tokens:
         raise EnvironmentError(
-            "No GitHub tokens found. Set GITHUB_TOKEN or configure token service with TEAM_IDS and SERVICE_AUTH."
+            "No GitHub tokens found. Set GITHUB_TOKENS, GITHUB_TOKEN, or configure token service with TEAM_IDS and SERVICE_AUTH."
         )
     
     return tokens

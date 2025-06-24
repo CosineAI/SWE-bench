@@ -137,7 +137,7 @@ def main(pr_file: str, output: str, token: Optional[str] = None):
     def load_repo(repo_name):
         # Return repo object for a given repo name
         owner, repo = repo_name.split("/")
-        return Repo(owner, repo)
+        return Repo(owner, repo, token=token)
 
     # Ensure output directory exists
     output_dir = os.path.dirname(os.path.abspath(output))

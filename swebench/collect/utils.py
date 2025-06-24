@@ -54,14 +54,24 @@ class Repo:
         self.owner = owner
         self.name = name
 
-        token = self.token_rotator.current_token()
-        self.token = token
-        logger.info(f"Using token rotator to get token for {owner}/{name} - {token}")
-        self.api = GhApi(token=token)
+        # Use passed token if provided, otherwise use token rotator
+        if token is not None:
+            self.token = token
+            self._direct_token = True
+            logger.info(f"Using provided token for {owner}/{name} - {token}")
+        else:
+            self.token = self.token_rotator.current_token()
+            self._direct_token = False
+            logger.info(f"Using token rotator to get token for {owner}/{name} - {self.token}")
+        
+        self.api = GhApi(token=self.token)
 
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
         slug = None
-        if self.token_rotator:
+        if token is not None:
+            # Using provided token directly
+            slug = 'direct'
+        elif self.token_rotator:
             with self.token_rotator.lock:
                 if self.token_rotator.slugs:
                     slug = self.token_rotator.slugs[self.token_rotator.idx]
@@ -80,6 +90,15 @@ class Repo:
         Return:
             values (dict): response object of `func`
         """
+        # If this Repo instance was created with a direct token, use simpler API call without rotation
+        if hasattr(self, '_direct_token') and self._direct_token:
+            try:
+                values = func(**kwargs)
+                return values
+            except Exception as e:
+                logger.error(f"[{self.owner}/{self.name}] API call failed with direct token: {e}")
+                raise
+        
         # Import here to avoid circular import at module level
         token_rotator = self.token_rotator
         if token_rotator is None:

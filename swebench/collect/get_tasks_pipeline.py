@@ -362,6 +362,29 @@ if __name__ == "__main__":
         if not args.repos:
             print("No valid repositories to process. Exiting.", file=sys.stderr)
             sys.exit(1)
+            
+        # Analyze and print language distribution
+        from collections import defaultdict
+        lang_counter = defaultdict(int)
+        for repo in args.repos:
+            # Extract language from repo name (assuming format: owner/lang-repo-name)
+            parts = repo.split('/')
+            if len(parts) > 1:
+                lang = parts[0].lower()
+                lang_counter[lang] += 1
+        
+        # Print language distribution table
+        if lang_counter:
+            print("\nLanguage distribution in the repository list:")
+            print("-" * 40)
+            print(f"{'Language':<20} | {'Count':<10}")
+            print("-" * 40)
+            for lang, count in sorted(lang_counter.items(), key=lambda x: x[1], reverse=True):
+                print(f"{lang:<20} | {count:<10}")
+            print("-" * 40)
+            print(f"{'Total':<20} | {len(args.repos):<10}")
+            print("-" * 40)
+            print()
     
     # Calculate cutoff date from recency_months if provided
     if args.recency_months is not None and args.recency_months > 0:
