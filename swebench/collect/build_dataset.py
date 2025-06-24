@@ -48,9 +48,34 @@ def create_instance(repo: Repo, pull: dict) -> dict:
     }
 
 
+def is_documentation_only(pull: dict) -> bool:
+    """
+    Check if a PR only modifies documentation files.
+    
+    Args:
+        pull (dict): pull request object
+    Returns:
+        bool: True if PR only modifies documentation files, False otherwise
+    """
+    # Common documentation file extensions and names
+    doc_extensions = {'.md', '.rst', '.txt', '.tex', '.adoc'}
+    doc_filenames = {'readme', 'license', 'contributing', 'changelog', 'code_of_conduct'}
+    
+    # If there are no files in the PR, we can't determine if it's documentation only
+    if 'files' not in pull or not pull['files']:
+        return False
+        
+    for file in pull['files']:
+        filename = file['filename'].lower()
+        # If any file is not a documentation file, return False
+        if not (any(filename.endswith(ext) for ext in doc_extensions) or 
+               any(doc in filename for doc in doc_filenames)):
+            return False
+    return True
+
 def is_valid_pull(pull: dict) -> bool:
     """
-    Check whether PR has an associated issue and is merged
+    Check whether PR has an associated issue, is merged, and is not documentation-only
 
     Args:
         pull (dict): pull request object
@@ -60,6 +85,8 @@ def is_valid_pull(pull: dict) -> bool:
     if pull["merged_at"] is None:
         return False
     if "resolved_issues" not in pull or len(pull["resolved_issues"]) < 1:
+        return False
+    if is_documentation_only(pull):
         return False
     return True
 

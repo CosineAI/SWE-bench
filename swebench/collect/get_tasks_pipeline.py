@@ -5,9 +5,12 @@
 import argparse
 import os
 import traceback
+import sys
 
 from dotenv import load_dotenv
 from multiprocessing import Pool
+import os
+import re
 from swebench.collect.build_dataset import main as build_dataset
 from swebench.collect.print_pulls import main as print_pulls
 from swebench.collect.get_top_repos import get_top_repos_by_language
@@ -15,6 +18,76 @@ from ghapi.core import GhApi
 from swebench.collect.token_utils import get_tokens
 
 load_dotenv()
+
+
+def read_repos_from_markdown(file_path: str) -> list:
+    """Extract GitHub repository URLs from a markdown file.
+    
+    This function parses a markdown file and extracts all GitHub repository URLs
+    in the format 'owner/repo'. It handles both plain URLs and markdown links.
+    
+    Args:
+        file_path: Path to the markdown file containing GitHub repository URLs
+        
+    Returns:
+        list: Unique list of repository identifiers in 'owner/repo' format
+        
+    Example:
+        Input file content:
+            - https://github.com/owner1/repo1
+            - [https://github.com/owner2/repo2](https://github.com/owner2/repo2)
+        
+        Returns:
+            ['owner1/repo1', 'owner2/repo2']
+    """
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Find all GitHub repository URLs in the format github.com/owner/repo
+    urls = re.findall(r'https?://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)', content)
+    
+    # Clean up the repository names (remove any trailing slashes or other characters)
+    repos = [url.rstrip('/') for url in urls]
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    return [repo for repo in repos if not (repo in seen or seen.add(repo))]
+
+
+def get_github_token():
+    """Get GitHub tokens from both direct token and token service.
+    
+    Returns:
+        list: List of GitHub tokens, with direct token (if available) included in the rotation
+        
+    Raises:
+        EnvironmentError: If no valid tokens are found
+    """
+    tokens = []
+    
+    # Add direct token if available
+    direct_token = os.getenv("GITHUB_TOKEN")
+    if direct_token:
+        tokens.append(direct_token.strip())
+    
+    # Add tokens from token service if available
+    try:
+        service_tokens = get_tokens()
+        tokens.extend(service_tokens)
+    except Exception as e:
+        if not direct_token:
+            # Only raise if we don't have a direct token either
+            raise EnvironmentError(
+                "Failed to get GitHub tokens. Either set GITHUB_TOKEN environment variable "
+                "or configure token service with TEAM_IDS and SERVICE_AUTH."
+            ) from e
+    
+    if not tokens:
+        raise EnvironmentError(
+            "No GitHub tokens found. Set GITHUB_TOKEN or configure token service."
+        )
+        
+    return tokens
 
 
 def split_instances(input_list: list, n: int) -> list:
@@ -96,6 +169,20 @@ def construct_data_files(data: dict):
             print("-" * 80)
 
 
+def process_repository_file(repo_file):
+    """Process a repository file and return the list of repositories."""
+    try:
+        repos = read_repos_from_markdown(repo_file)
+        if not repos:
+            print(f"No valid repositories found in {repo_file}", file=sys.stderr)
+            return None
+        print(f"Read {len(repos)} repositories from {repo_file}")
+        return repos
+    except Exception as e:
+        print(f"Error reading repository file: {e}", file=sys.stderr)
+        return None
+
+
 def main(
     repos: list = None,
     path_prs: str = None,
@@ -104,6 +191,8 @@ def main(
     cutoff_date: str = None,
     languages: list = None,
     max_repos_per_language: int = 50,
+    repo_file: str = None,
+    recency_months: int = None,
 ):
     """
     Spawns multiple threads given multiple GitHub tokens for collecting fine tuning data
@@ -146,10 +235,10 @@ def main(
         if isinstance(languages, str):
             languages = [l.strip() for l in languages.split(",")]  # noqa: E741
         # Get GitHub tokens for GhApi (use first token)
-        tokens = get_tokens()
+        tokens = get_github_token()
         if not tokens:
             raise Exception(
-                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
+                "No GitHub tokens found. Set GITHUB_TOKEN or configure token service with TEAM_IDS and SERVICE_AUTH."
             )
         gh_token = tokens[0].strip()
         api = GhApi(token=gh_token)
@@ -178,10 +267,10 @@ def main(
     print(f"Will save PR data to {path_prs_abs}")
     print(f"Will save task instance data to {path_tasks_abs}")
 
-    tokens = get_tokens()
+    tokens = get_github_token()
     if not tokens:
         raise Exception(
-            "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
+            "No GitHub tokens found. Set GITHUB_TOKEN or configure token service with TEAM_IDS and SERVICE_AUTH."
         )
     data_task_lists = split_instances(all_repos, len(tokens))
 
@@ -203,22 +292,31 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    
+    # Create mutually exclusive group for repo source
+    repo_group = parser.add_mutually_exclusive_group(required=True)
+    repo_group.add_argument(
         "--repos",
         nargs="+",
         help="List of repositories (e.g., `sqlfluff/sqlfluff`) to create task instances for",
     )
-    parser.add_argument(
+    repo_group.add_argument(
         "--languages",
         nargs="+",
         help="Programming language(s) to fetch top GitHub repos for (e.g., --languages python javascript go)",
-        default=None,
     )
+    repo_group.add_argument(
+        "--repo-file",
+        type=str,
+        help="Path to markdown file containing a list of GitHub repository URLs",
+    )
+    
+    # Add other arguments
     parser.add_argument(
         "--max_repos_per_language",
         type=int,
         help="Max repos to fetch for each language (default: 50)",
-        default=10,
+        default=50,
     )
     # Set default paths relative to the script location
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -238,7 +336,10 @@ if __name__ == "__main__":
         help=f"Path to folder to save task instance data files to (default: {default_tasks})",
     )
     parser.add_argument(
-        "--max_pulls", type=int, help="Maximum number of pulls to log", default=None
+        "--max_pulls", 
+        type=int, 
+        help="Maximum number of pulls to log per repository", 
+        default=100
     )
     parser.add_argument(
         "--cutoff_date",
@@ -248,105 +349,44 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--recency_months", "--months",
-        type=int,
+        type=int, 
         default=None,
         help="(Optional) Only include repositories pushed within the last N months (approximate, 30*N days).",
     )
+    
     args = parser.parse_args()
-
-    # Calculate repo cutoff if recency_months is set
-    repo_cutoff_date = None
-    if args.recency_months is not None:
+    
+    # Process repository file if provided
+    if args.repo_file:
+        args.repos = process_repository_file(args.repo_file)
+        if not args.repos:
+            print("No valid repositories to process. Exiting.", file=sys.stderr)
+            sys.exit(1)
+    
+    # Calculate cutoff date from recency_months if provided
+    if args.recency_months is not None and args.recency_months > 0:
         from datetime import datetime, timedelta
-        repo_cutoff_date = (datetime.utcnow() - timedelta(days=30 * args.recency_months)).strftime("%Y-%m-%d")
+        args.cutoff_date = (datetime.now() - timedelta(days=args.recency_months*30)).strftime("%Y%m%d")
+        print(f"Using cutoff date: {args.cutoff_date} (last {args.recency_months} months)")
+    elif args.cutoff_date:
+        print(f"Using provided cutoff date: {args.cutoff_date}")
+    else:
+        print("No cutoff date specified, will fetch all available PRs")
 
-    # Patch main call to pass the cutoff to language-based repo discovery
-    def main_with_recency(
-        repos: list = None,
-        path_prs: str = None,
-        path_tasks: str = None,
-        max_pulls: int = None,
-        cutoff_date: str = None,
-        languages: list = None,
-        max_repos_per_language: int = 50,
-    ):
-        all_repos = set()
-        if repos:
-            if isinstance(repos, str):
-                repos = [r.strip() for r in repos.split(",")]
-            for repo in repos:
-                if repo:
-                    all_repos.add(repo.strip(",").strip())
-
-        if languages:
-            if isinstance(languages, str):
-                languages = [l.strip() for l in languages.split(",")]  # noqa: E741
-            tokens = get_tokens()
-            if not tokens:
-                raise Exception(
-                    "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
-                )
-            gh_token = tokens[0].strip()
-            api = GhApi(token=gh_token)
-            for lang in languages:
-                try:
-                    # Pass repo_cutoff_date as pushed_after if set
-                    from swebench.collect.get_top_repos import get_top_repos_by_language
-                    top_repos = get_top_repos_by_language(
-                        lang, max_repos_per_language, api, pushed_after=repo_cutoff_date
-                    )
-                    for repo in top_repos:
-                        all_repos.add(repo)
-                except Exception as e:
-                    print(f"Error getting repos for language '{lang}': {e}")
-
-        if not all_repos:
-            raise Exception(
-                "No repositories provided or discovered. Use --repos and/or --languages."
-            )
-
-        all_repos_sorted = sorted(all_repos)
-        print(f"Summary: {len(all_repos_sorted)} total repositories selected for processing.")
-        if languages:
-            print("Languages used: ", ", ".join(languages))
-        print("Repositories:")
-        for repo in all_repos_sorted:
-            print(f" - {repo}")
-
-        path_prs_abs, path_tasks_abs = os.path.abspath(path_prs), os.path.abspath(path_tasks)
-        print(f"Will save PR data to {path_prs_abs}")
-        print(f"Will save task instance data to {path_tasks_abs}")
-
-        tokens = get_tokens()
-        if not tokens:
-            raise Exception(
-                "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
-            )
-        data_task_lists = split_instances(all_repos_sorted, len(tokens))
-
-        data_pooled = [
-            {
-                "repos": repos,
-                "path_prs": path_prs_abs,
-                "path_tasks": path_tasks_abs,
-                "max_pulls": max_pulls,
-                "cutoff_date": cutoff_date,
-                "token": token,
-            }
-            for repos, token in zip(data_task_lists, tokens)
-        ]
-
-        from multiprocessing import Pool
-        with Pool(len(tokens)) as p:
-            p.map(construct_data_files, data_pooled)
-
-    # Replace call to main with enhanced version
-    main_with_recency(
-        repos=args.repos,
-        path_prs=args.path_prs,
-        path_tasks=args.path_tasks,
-        max_pulls=args.max_pulls,
-        cutoff_date=args.cutoff_date,
-        languages=args.languages,
-        max_repos_per_language=args.max_repos_per_language,
-    )
+    # Call the main function with processed arguments
+    try:
+        main(
+            repos=args.repos,
+            path_prs=args.path_prs,
+            path_tasks=args.path_tasks,
+            max_pulls=args.max_pulls,
+            cutoff_date=args.cutoff_date,
+            languages=args.languages,
+            max_repos_per_language=args.max_repos_per_language,
+            repo_file=args.repo_file,
+            recency_months=args.recency_months
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)

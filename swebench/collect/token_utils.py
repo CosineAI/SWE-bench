@@ -151,5 +151,33 @@ class TokenRotator:
         with self.lock:
             return len(self.slugs)
 
+def get_github_token():
+    """
+    Get all available GitHub tokens, combining direct token and token service tokens.
+    
+    Returns:
+        list: List of GitHub tokens (direct token first if available, then token service tokens)
+    """
+    tokens = []
+    
+    # Add direct token if available
+    direct_token = os.getenv("GITHUB_TOKEN")
+    if direct_token and direct_token.strip():
+        tokens.append(direct_token.strip())
+    
+    # Add tokens from token service if available
+    try:
+        service_tokens = get_tokens()
+        tokens.extend(service_tokens)
+    except Exception as e:
+        logger.warning(f"Could not get tokens from token service: {e}")
+    
+    if not tokens:
+        raise EnvironmentError(
+            "No GitHub tokens found. Set GITHUB_TOKEN or configure token service with TEAM_IDS and SERVICE_AUTH."
+        )
+    
+    return tokens
+
 # Expose a singleton TokenRotator for use elsewhere
 token_rotator = TokenRotator()
