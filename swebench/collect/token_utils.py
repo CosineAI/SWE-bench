@@ -10,45 +10,76 @@ load_dotenv()
 
 def get_tokens():
     """
-    Fetch a list of GitHub tokens for the current team slugs from a local token service.
-
-    - Reads TEAM_IDS (comma-separated team slug list) from env (required).
-    - Reads GHTOKEN_SERVICE_DOMAIN (default http://localhost:3001).
-    - Reads GHTOKEN_SERVICE_BEARER (token string) or falls back to SERVICE_AUTH.
-    - For each slug, requests {domain}/github/token?team={slug} with Bearer <token>.
-    - Returns a list of tokens (one per team).
+    Get GitHub tokens from environment variables or token service.
+    
+    Tries to get tokens in this order:
+    1. From GITHUB_TOKENS environment variable (comma-separated)
+    2. From GITHUB_TOKEN environment variable
+    3. From token service (if TEAM_IDS and GHTOKEN_SERVICE_BEARER are set)
+    
+    Returns:
+        List[str]: List of GitHub tokens
     """
+    logger.info("Starting token fetch process...")
+    
+    # Try to get tokens from GITHUB_TOKENS
+    github_tokens = os.getenv("GITHUB_TOKENS")
+    if github_tokens:
+        logger.info(f"Found GITHUB_TOKENS environment variable")
+        tokens = [token.strip() for token in github_tokens.split(",") if token.strip()]
+        if tokens:
+            logger.info(f"Found {len(tokens)} token(s) in GITHUB_TOKENS")
+            return tokens
+        logger.warning("GITHUB_TOKENS is set but no valid tokens found")
+    
+    # Try to get token from GITHUB_TOKEN
+    github_token = os.getenv("GITHUB_TOKEN")
+    if github_token:
+        return [github_token]
+    
+    # Fall back to token service if configured
     team_ids = os.getenv("TEAM_IDS")
-    if not team_ids:
-        raise EnvironmentError(
-            "TEAM_IDS environment variable not set. Please set TEAM_IDS to a comma-separated list of team slugs."
-        )
-    slugs = [slug.strip() for slug in team_ids.split(",") if slug.strip()]
-    if not slugs:
-        raise ValueError("No valid team slugs found in TEAM_IDS.")
+    if team_ids:
+        logger.info(f"Using token service to fetch GitHub tokens for teams: {team_ids}")
+        domain = os.getenv("GHTOKEN_SERVICE_DOMAIN", "http://localhost:3001")
+        bearer = os.getenv("GHTOKEN_SERVICE_BEARER") or os.getenv("SERVICE_AUTH")
+        if not bearer:
+            raise EnvironmentError(
+                "Missing GHTOKEN_SERVICE_BEARER or SERVICE_AUTH environment variable for token service authentication."
+            )
 
-    domain = os.getenv("GHTOKEN_SERVICE_DOMAIN", "http://localhost:3001")
-    bearer = os.getenv("GHTOKEN_SERVICE_BEARER") or os.getenv("SERVICE_AUTH")
-    if not bearer:
-        raise EnvironmentError(
-            "Missing GHTOKEN_SERVICE_BEARER or SERVICE_AUTH environment variable for token service authentication."
-        )
+        slugs = [slug.strip() for slug in team_ids.split(",") if slug.strip()]
+        if not slugs:
+            raise ValueError("No valid team slugs found in TEAM_IDS.")
 
-    tokens = []
-    headers = {"Authorization": f"Bearer {bearer}"}
-    for slug in slugs:
-        url = f"{domain.rstrip('/')}/github/token"
-        try:
-            resp = requests.get(url, headers=headers, params={"team": slug}, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            token = data.get("token")
-            if not token:
-                raise ValueError(f"No 'token' field in response from {url} for team '{slug}'")
-            tokens.append(token)
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch token for team '{slug}' from {url}: {e}") from e
-    return tokens
+        tokens = []
+        headers = {"Authorization": f"Bearer {bearer}"}
+        for slug in slugs:
+            url = f"{domain.rstrip('/')}/github/token"
+            try:
+                logger.debug(f"Fetching token for team: {slug}")
+                resp = requests.get(url, headers=headers, params={"team": slug}, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                token = data.get("token")
+                if not token:
+                    logger.error(f"No 'token' field in response from {url} for team '{slug}'")
+                    continue
+                logger.debug(f"Successfully fetched token for team: {slug}")
+                tokens.append(token)
+            except Exception as e:
+                logger.error(f"Failed to fetch token for team '{slug}' from {url}: {e}")
+        
+        if not tokens:
+            raise EnvironmentError("Failed to fetch any tokens from the token service")
+            
+        logger.info(f"Successfully fetched {len(tokens)} tokens from {len(slugs)} team(s)")
+        return tokens
+    
+    # No tokens found
+    raise EnvironmentError(
+        "No GitHub tokens found. Please set GITHUB_TOKEN, GITHUB_TOKENS, or configure TEAM_IDS with token service."
+    )
 
 
 class TokenRotator:
@@ -153,3 +184,6 @@ class TokenRotator:
 
 # Expose a singleton TokenRotator for use elsewhere
 token_rotator = TokenRotator()
+
+# Alias for backward compatibility
+get_github_token = get_tokens

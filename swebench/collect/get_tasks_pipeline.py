@@ -5,6 +5,7 @@
 import argparse
 import os
 import traceback
+import json
 
 from dotenv import load_dotenv
 from multiprocessing import Pool
@@ -170,22 +171,21 @@ def main(
         raise Exception(
             "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
         )
-    data_task_lists = split_instances(all_repos, len(tokens))
+    # Use only the first token instead of all tokens
+    single_token = tokens[0]
 
-    data_pooled = [
-        {
-            "repos": repos,
-            "path_prs": path_prs_abs,
-            "path_tasks": path_tasks_abs,
-            "max_pulls": max_pulls,
-            "cutoff_date": cutoff_date,
-            "token": token,
-        }
-        for repos, token in zip(data_task_lists, tokens)
-    ]
+    # Process all repos with single token (no multiprocessing)
+    data = {
+        "repos": all_repos,
+        "path_prs": path_prs_abs,
+        "path_tasks": path_tasks_abs,
+        "max_pulls": max_pulls,
+        "cutoff_date": cutoff_date,
+        "token": single_token,
+    }
 
-    with Pool(len(tokens)) as p:
-        p.map(construct_data_files, data_pooled)
+    # Process sequentially with single token
+    construct_data_files(data)
 
 
 if __name__ == "__main__":
@@ -230,6 +230,12 @@ if __name__ == "__main__":
         default=None,
         help="(Optional) Only include repositories pushed within the last N months (approximate, 30*N days).",
     )
+    parser.add_argument(
+        "--repo_list_json",
+        type=str,
+        default=None,
+        help="Path to repo_list.json file mapping languages to repository lists. If provided, repositories will be loaded from this file instead of querying GitHub.",
+    )
     args = parser.parse_args()
 
     # Calculate repo cutoff if recency_months is set
@@ -247,6 +253,7 @@ if __name__ == "__main__":
         cutoff_date: str = None,
         languages: list = None,
         max_repos_per_language: int = 50,
+        repo_list_json: str = None,
     ):
         all_repos = set()
         if repos:
@@ -256,7 +263,23 @@ if __name__ == "__main__":
                 if repo:
                     all_repos.add(repo.strip(",").strip())
 
-        if languages:
+        # Load repositories from a JSON mapping file if provided
+        if repo_list_json:
+            try:
+                with open(repo_list_json, "r") as f:
+                    repo_map = json.load(f)
+                languages_to_use = languages if languages else repo_map.keys()
+                for lang in languages_to_use:
+                    if lang in repo_map:
+                        for url in repo_map[lang][:max_repos_per_language]:
+                            repo_path = url.split("github.com/")[-1].strip("/")
+                            if repo_path:
+                                all_repos.add(repo_path)
+            except Exception as e:
+                print(f"Error loading repos from {repo_list_json}: {e}")
+
+        # Fallback to querying GitHub if languages specified and no repo_list_json provided
+        if languages and not repo_list_json:
             if isinstance(languages, str):
                 languages = [l.strip() for l in languages.split(",")]  # noqa: E741
             tokens = get_tokens()
@@ -300,23 +323,21 @@ if __name__ == "__main__":
             raise Exception(
                 "No GitHub tokens returned from token service. Check TEAM_IDS and token service configuration."
             )
-        data_task_lists = split_instances(all_repos_sorted, len(tokens))
+        # Use only the first token instead of all tokens
+        single_token = tokens[0]
 
-        data_pooled = [
-            {
-                "repos": repos,
-                "path_prs": path_prs_abs,
-                "path_tasks": path_tasks_abs,
-                "max_pulls": max_pulls,
-                "cutoff_date": cutoff_date,
-                "token": token,
-            }
-            for repos, token in zip(data_task_lists, tokens)
-        ]
+        # Process all repos with single token (no multiprocessing)
+        data = {
+            "repos": all_repos_sorted,
+            "path_prs": path_prs_abs,
+            "path_tasks": path_tasks_abs,
+            "max_pulls": max_pulls,
+            "cutoff_date": cutoff_date,
+            "token": single_token,
+        }
 
-        from multiprocessing import Pool
-        with Pool(len(tokens)) as p:
-            p.map(construct_data_files, data_pooled)
+        # Process sequentially with single token
+        construct_data_files(data)
 
     # Replace call to main with enhanced version
     main_with_recency(
@@ -327,4 +348,5 @@ if __name__ == "__main__":
         cutoff_date=args.cutoff_date,
         languages=args.languages,
         max_repos_per_language=args.max_repos_per_language,
+        repo_list_json=args.repo_list_json,
     )
