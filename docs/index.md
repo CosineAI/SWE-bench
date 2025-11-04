@@ -1,4 +1,4 @@
-# Getting Started
+# SWE-bench
 
 <div style="text-align:center">
     <img src="assets/figures/swellama_banner_nobg.svg" alt="Kawi the SWE-Llama" style="max-height: 10em"/>
@@ -21,6 +21,9 @@ Check out the other projects that are part of the SWE-bench ecosystem!
     </a>
     <a href="https://swebench.com/sb-cli">
         <img src="assets/icons/sb-cli-button.svg" alt="SWE-bench CLI" style="max-height: 5em; border: 2px solid rgb(0, 0, 0); border-radius: 5px; padding: 5px;"/>
+    </a>
+    <a href="https://mini-swe-agent.com">
+        <img src="assets/icons/mini-swe-agent-banner.svg" alt="mini-swe" style="max-height: 5em; border: 2px solid rgb(0, 0, 0); border-radius: 5px; padding: 5px;"/>
     </a>
 </div>
 

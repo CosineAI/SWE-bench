@@ -48,7 +48,7 @@ datasets = [
     "jedi",
 ]
 inference = [
-    "torch",
+    "torch>=2.0.0",
     "anthropic",
     "jedi",
     "openai",
@@ -58,7 +58,7 @@ inference = [
     "tiktoken",
     "transformers",
     "triton",
-    "flash_attn",
+    "flash_attn>=2.0.0",
     "requests",
 ]
 test = [

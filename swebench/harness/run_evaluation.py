@@ -3,6 +3,7 @@ from __future__ import annotations
 import docker
 import json
 import platform
+import threading
 import traceback
 
 if platform.system() == "Linux":
@@ -10,6 +11,7 @@ if platform.system() == "Linux":
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from pathlib import Path, PurePosixPath
+from tqdm.auto import tqdm
 
 from swebench.harness.constants import (
     APPLY_PATCH_FAIL,
@@ -75,7 +77,7 @@ def run_instance(
     run_id: str,
     timeout: int | None = None,
     rewrite_reports: bool = False,
-):
+) -> dict:
     """
     Run a single instance with the given prediction.
 
@@ -109,9 +111,16 @@ def run_instance(
         # Write report to report.json
         with open(report_path, "w") as f:
             f.write(json.dumps(report, indent=4))
-        return instance_id, report
+        return {
+            "completed": True,
+            "resolved": report[instance_id]["resolved"],
+        }
     if report_path.exists():
-        return instance_id, json.loads(report_path.read_text())
+        report = json.loads(report_path.read_text())
+        return {
+            "completed": True,
+            "resolved": report[instance_id]["resolved"],
+        }
 
     if not test_spec.is_remote_image:
         # Link the image build dir in the log dir
@@ -136,6 +145,8 @@ def run_instance(
 
     # Run the instance
     container = None
+    eval_completed = False
+    report = {}
     try:
         # Build + start instance container (instance image should already be built)
         container = build_container(
@@ -238,12 +249,8 @@ def run_instance(
         # Write report to report.json
         with open(report_path, "w") as f:
             f.write(json.dumps(report, indent=4))
-        return instance_id, report
-    except EvaluationError as e:
-        error_msg = traceback.format_exc()
-        logger.info(error_msg)
-        print(e)
-    except BuildImageError as e:
+        eval_completed = True
+    except (EvaluationError, BuildImageError) as e:
         error_msg = traceback.format_exc()
         logger.info(error_msg)
         print(e)
@@ -260,7 +267,10 @@ def run_instance(
         if rm_image:
             remove_image(client, test_spec.instance_image_key, logger)
         close_logger(logger)
-    return
+        return {
+            "completed": eval_completed,
+            "resolved": report.get(instance_id, {}).get("resolved", False),
+        }
 
 
 def run_instances(
@@ -272,8 +282,9 @@ def run_instances(
     max_workers: int,
     run_id: str,
     timeout: int,
-    namespace: str = "swebench",
+    namespace: str | None = "swebench",
     instance_image_tag: str = "latest",
+    env_image_tag: str = "latest",
     rewrite_reports: bool = False,
 ):
     """
@@ -293,7 +304,10 @@ def run_instances(
     test_specs = list(
         map(
             lambda instance: make_test_spec(
-                instance, namespace=namespace, instance_image_tag=instance_image_tag
+                instance,
+                namespace=namespace,
+                instance_image_tag=instance_image_tag,
+                env_image_tag=env_image_tag,
             ),
             instances,
         )
@@ -335,7 +349,25 @@ def run_instances(
 
     # run instances in parallel
     print(f"Running {len(instances)} instances...")
-    run_threadpool(run_instance, payloads, max_workers)
+    stats = {"✓": 0, "✖": 0, "error": 0}
+    pbar = tqdm(total=len(payloads), desc="Evaluation", postfix=stats)
+    lock = threading.Lock()
+
+    def run_evaluation_with_progress(*args):
+        result = run_instance(*args)
+        with lock:
+            if result["completed"]:
+                if result["resolved"]:
+                    stats["✓"] += 1
+                else:
+                    stats["✖"] += 1
+            else:
+                stats["error"] += 1
+            pbar.set_postfix(stats)
+            pbar.update()
+        return result
+
+    run_threadpool(run_evaluation_with_progress, payloads, max_workers)
     print("All instances run.")
 
 
@@ -455,6 +487,7 @@ def main(
     rewrite_reports: bool,
     modal: bool,
     instance_image_tag: str = "latest",
+    env_image_tag: str = "latest",
     report_dir: str = ".",
 ):
     """
@@ -507,7 +540,15 @@ def main(
     else:
         # build environment images + run instances
         if namespace is None and not rewrite_reports:
-            build_env_images(client, dataset, force_rebuild, max_workers)
+            build_env_images(
+                client,
+                dataset,
+                force_rebuild,
+                max_workers,
+                namespace,
+                instance_image_tag,
+                env_image_tag,
+            )
         run_instances(
             predictions,
             dataset,
@@ -519,12 +560,21 @@ def main(
             timeout,
             namespace=namespace,
             instance_image_tag=instance_image_tag,
+            env_image_tag=env_image_tag,
             rewrite_reports=rewrite_reports,
         )
 
     # clean images + make final report
     clean_images(client, existing_images, cache_level, clean)
-    return make_run_report(predictions, full_dataset, run_id, client)
+    return make_run_report(
+        predictions,
+        full_dataset,
+        run_id,
+        client,
+        namespace,
+        instance_image_tag,
+        env_image_tag,
+    )
 
 
 if __name__ == "__main__":
@@ -535,21 +585,24 @@ if __name__ == "__main__":
 
     # Common args
     parser.add_argument(
+        "-d",
         "--dataset_name",
         default="SWE-bench/SWE-bench_Lite",
         type=str,
         help="Name of dataset or path to JSON file.",
     )
     parser.add_argument(
-        "--split", type=str, default="test", help="Split of the dataset"
+        "-s", "--split", type=str, default="test", help="Split of the dataset"
     )
     parser.add_argument(
+        "-i",
         "--instance_ids",
         nargs="+",
         type=str,
         help="Instance IDs to run (space separated)",
     )
     parser.add_argument(
+        "-p",
         "--predictions_path",
         type=str,
         help="Path to predictions file - if 'gold', uses gold predictions",
@@ -567,6 +620,7 @@ if __name__ == "__main__":
         "--open_file_limit", type=int, default=4096, help="Open file limit"
     )
     parser.add_argument(
+        "-t",
         "--timeout",
         type=int,
         default=1_800,
@@ -591,9 +645,10 @@ if __name__ == "__main__":
         "--clean", type=str2bool, default=False, help="Clean images above cache level"
     )
     parser.add_argument(
-        "--run_id", type=str, required=True, help="Run ID - identifies the run"
+        "-id", "--run_id", type=str, required=True, help="Run ID - identifies the run"
     )
     parser.add_argument(
+        "-n",
         "--namespace",
         type=optional_str,
         default="swebench",
@@ -601,6 +656,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--instance_image_tag", type=str, default="latest", help="Instance image tag"
+    )
+    parser.add_argument(
+        "--env_image_tag", type=str, default="latest", help="Environment image tag"
     )
     parser.add_argument(
         "--rewrite_reports",

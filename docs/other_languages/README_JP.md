@@ -17,7 +17,7 @@
 
 ---
 <p align="center">
-ICLR 2024 の論文 <a href="http://swe-bench.github.io/paper.pdf">SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</a> のコードとデータ
+ICLR 2024 の論文 <a href="https://arxiv.org/abs/2310.06770">SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</a> のコードとデータ
     </br>
     </br>
     <a href="https://www.python.org/">
@@ -82,7 +82,7 @@ python -m swebench.harness.run_evaluation \
 
 ## 💽 使用方法
 
-> [!警告]
+> [!warning]
 > SWE-benchでの高速評価の実行はリソース集約的である可能性があります
 > 評価ハーネスは、少なくとも120GBの空き容量、16GBのRAM、8 CPUコアを持つ`x86_64`マシンで実行することをお勧めします。
 > `--max_workers`引数を調整して、マシンに最適なワーカー数を見つける必要があるかもしれませんが、`min(0.75 * os.cpu_count(), 24)`未満を使用することをお勧めします。
@@ -100,6 +100,7 @@ python -m swebench.harness.run_evaluation \
     --run_id <実行ID>
     # ゴールドパッチを検証するには --predictions_path 'gold' を使用
     # --run_id で評価実行に名前を付ける
+    # --modal true Modal で使用する
 ```
 
 このコマンドは、現在のディレクトリにdockerビルドログ（`logs/build_images`）と評価ログ（`logs/run_evaluation`）を生成します。

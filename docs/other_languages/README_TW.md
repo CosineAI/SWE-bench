@@ -13,7 +13,7 @@
 
 ---
 <p align="center">
-你可以在我們的ICLR 2024的論文<a href="http://swe-bench.github.io/paper.pdf">《SWE-bench: Can Language Models Resolve Real-World GitHub Issues?》</a>中找到我們的代碼和數據
+你可以在我們的ICLR 2024的論文<a href="https://arxiv.org/abs/2310.06770">《SWE-bench: Can Language Models Resolve Real-World GitHub Issues?》</a>中找到我們的代碼和數據
     </br>
     </br>
     <a href="https://www.python.org/">
@@ -81,7 +81,7 @@ python -m swebench.harness.run_evaluation \
 
 ## 💽 使用
 
-> [!警告]
+> [!warning]
 > 在SWE-bench上運行快速評估可能會消耗大量資源
 > 我們建議在一台具有至少120GB可用存儲空間、16GB RAM和8個CPU核心的`x86_64`機器上運行評估工具。
 > 你可能需要嘗試調整`--max_workers`參數以找到適合你機器的最佳工作進程數,但我們建議使用少於`min(0.75 * os.cpu_count(), 24)`的數值。
@@ -99,6 +99,7 @@ python -m swebench.harness.run_evaluation \
     --run_id <運行ID>
     # 使用 --predictions_path 'gold' 來驗證黃金補丁
     # 使用 --run_id 來命名評估運行
+    # 使用 --modal true 来在 Modal 上使用
 ```
 
 這個命令將在當前目錄中生成docker構建日誌(`logs/build_images`)和評估日誌(`logs/run_evaluation`)。

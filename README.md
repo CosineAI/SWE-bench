@@ -31,7 +31,7 @@ Code and data for the following works:
 * [ICLR 2024 Oral] <a href="https://arxiv.org/abs/2310.06770">SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</a>
 
 ## 📰 News
-* **[Jan. 13, 2025]**: We've integrated [SWE-bench Multimodal](https://swebench.github.io/multimodal) ([paper](https://arxiv.org/abs/2410.03859), [dataset](https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal)) into this repository! Unlike SWE-bench, we've kept evaluation for the test split *private*. Submit to the leaderboard using [sb-cli](https://github.com/swe-bench/sb-cli/tree/main), our new cloud-based evaluation tool.
+* **[Jan. 13, 2025]**: We've integrated [SWE-bench Multimodal](https://swebench.com/multimodal) ([paper](https://arxiv.org/abs/2410.03859), [dataset](https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal)) into this repository! Unlike SWE-bench, we've kept evaluation for the test split *private*. Submit to the leaderboard using [sb-cli](https://github.com/swe-bench/sb-cli/tree/main), our new cloud-based evaluation tool.
 * **[Jan. 11, 2025]**: Thanks to [Modal](https://modal.com/), you can now run evaluations entirely on the cloud! See [here](https://github.com/swe-bench/SWE-bench/blob/main/docs/assets/evaluation.md#%EF%B8%8F-evaluation-with-modal) for more details.
 * **[Aug. 13, 2024]**: Introducing *SWE-bench Verified*! Part 2 of our collaboration with [OpenAI Preparedness](https://openai.com/preparedness/). A subset of 500 problems that real software engineers have confirmed are solvable. Check out more in the [report](https://openai.com/index/introducing-swe-bench-verified/)!
 * **[Jun. 27, 2024]**: We have an exciting update for SWE-bench - with support from [OpenAI's Preparedness](https://openai.com/preparedness/) team: We're moving to a fully containerized evaluation harness using Docker for more reproducible evaluations! Read more in our [report](https://github.com/swe-bench/SWE-bench/blob/main/docs/20240627_docker/README.md).
@@ -72,7 +72,7 @@ python -m swebench.harness.run_evaluation \
 ```
 > [!NOTE]
 > If using a MacOS M-series or other ARM-based systems, add `--namespace ''` to the above script.
-> By default, the evaluation script pulls images (built for Linux) from [DockerHub](https://hub.docker.com/repositories/swebench).
+> By default, the evaluation script pulls images (built for Linux) from [DockerHub](https://hub.docker.com/u/swebench).
 > Adding `--namespace ''` will cause evaluation images to be built locally instead.
 
 ## 💽 Usage
@@ -85,6 +85,7 @@ python -m swebench.harness.run_evaluation \
     --run_id <run_id>
     # use --predictions_path 'gold' to verify the gold patches
     # use --run_id to name the evaluation run
+    # use --modal true to run on Modal
 ```
 
 This command will generate docker build logs (`logs/build_images`) and evaluation logs (`logs/run_evaluation`) in the current directory.
@@ -136,6 +137,7 @@ MIT license. Check `LICENSE.md`.
 
 If you find our work helpful, please use the following citations.
 
+For SWE-bench (Verified):
 ```bibtex
 @inproceedings{
     jimenez2024swebench,
@@ -145,7 +147,10 @@ If you find our work helpful, please use the following citations.
     year={2024},
     url={https://openreview.net/forum?id=VTF8yNQM66}
 }
+```
 
+For SWE-bench Multimodal
+```bibtex
 @inproceedings{
     yang2024swebenchmultimodal,
     title={{SWE}-bench Multimodal: Do AI Systems Generalize to Visual Software Domains?},
@@ -156,7 +161,20 @@ If you find our work helpful, please use the following citations.
 }
 ```
 
-## Related projects
+For SWE-bench Multilingual
+```bibtex
+@misc{yang2025swesmith,
+    title={SWE-smith: Scaling Data for Software Engineering Agents},
+    author={John Yang and Kilian Lieret and Carlos E. Jimenez and Alexander Wettig and Kabir Khandpur and Yanzhe Zhang and Binyuan Hui and Ofir Press and Ludwig Schmidt and Diyi Yang},
+    year={2025},
+    eprint={2504.21798},
+    archivePrefix={arXiv},
+    primaryClass={cs.SE},
+    url={https://arxiv.org/abs/2504.21798},
+}
+```
+
+## Our Other Projects
 
 <div align="center">
   <a href="https://github.com/SWE-bench/sb-cli"><img src="docs/assets/sbcli_logo_text_below.svg" alt="sb-cli" height="120px"></a>
@@ -165,6 +183,8 @@ If you find our work helpful, please use the following citations.
    &nbsp;&nbsp;
   <a href="https://github.com/SWE-agent/SWE-agent"><img src="docs/assets/sweagent_logo_text_below.svg" alt="SWE-agent" height="120px"></a>
    &nbsp;&nbsp;
+  <a href="https://github.com/SWE-agent/Mini-SWE-Agent"><img src="docs/assets/mini_logo_text_below.svg" alt="Mini-SWE-Agent" height="120px"></a>
+  &nbsp;&nbsp;
   <a href="https://github.com/SWE-agent/SWE-ReX"><img src="docs/assets/swerex_logo_text_below.svg" alt="SWE-ReX" height="120px"></a>
    &nbsp;&nbsp;
   <!-- <a href="https://github.com/SWE-bench/SWE-bench"><img src="docs/assets/swebench_logo_text_below.svg" alt="SWE-bench" height="120px"></a> -->

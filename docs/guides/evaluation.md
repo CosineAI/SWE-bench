@@ -72,10 +72,11 @@ pip install modal swebench[modal]
 modal setup
 
 # Run evaluation on Modal
-python -m swebench.harness.modal_eval.run_modal \
+python -m swebench.harness.run_evaluation \
     --dataset_name princeton-nlp/SWE-bench_Lite \
     --predictions_path <path_to_predictions> \
-    --parallelism 10
+    --parallelism 10 \
+    --modal true
 ```
 
 ### Running with sb-cli
@@ -102,7 +103,7 @@ To evaluate only specific instances, use the `--instance_ids` parameter:
 ```bash
 python -m swebench.harness.run_evaluation \
     --predictions_path <path_to_predictions> \
-    --instance_ids httpie-cli__httpie-1088,sympy__sympy-20590 \
+    --instance_ids astropy__astropy-14539 sympy__sympy-20590 \
     --max_workers 2
 ```
 

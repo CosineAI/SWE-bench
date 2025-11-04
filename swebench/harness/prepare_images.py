@@ -17,6 +17,7 @@ def filter_dataset_to_build(
     force_rebuild: bool,
     namespace: str = None,
     tag: str = None,
+    env_image_tag: str = None,
 ):
     """
     Filter the dataset to only include instances that need to be built.
@@ -47,7 +48,12 @@ def filter_dataset_to_build(
             continue
 
         # Check if the instance needs to be built (based on force_rebuild flag and existing images)
-        spec = make_test_spec(instance, namespace=namespace, instance_image_tag=tag)
+        spec = make_test_spec(
+            instance,
+            namespace=namespace,
+            instance_image_tag=tag,
+            env_image_tag=env_image_tag,
+        )
         if force_rebuild:
             data_to_build.append(instance)
         elif spec.instance_image_key not in existing_images:
@@ -65,6 +71,7 @@ def main(
     open_file_limit,
     namespace,
     tag,
+    env_image_tag,
 ):
     """
     Build Docker images for the specified instances.
@@ -82,7 +89,7 @@ def main(
     # Filter out instances that were not specified
     dataset = load_swebench_dataset(dataset_name, split)
     dataset = filter_dataset_to_build(
-        dataset, instance_ids, client, force_rebuild, namespace, tag
+        dataset, instance_ids, client, force_rebuild, namespace, tag, env_image_tag
     )
 
     if len(dataset) == 0:
@@ -97,6 +104,7 @@ def main(
         max_workers=max_workers,
         namespace=namespace,
         tag=tag,
+        env_image_tag=env_image_tag,
     )
     print(f"Successfully built {len(successful)} images")
     print(f"Failed to build {len(failed)} images")
@@ -134,6 +142,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--tag", type=str, default=None, help="Tag to use for the images"
+    )
+    parser.add_argument(
+        "--env_image_tag", type=str, default=None, help="Environment image tag to use"
     )
     args = parser.parse_args()
     main(**vars(args))
