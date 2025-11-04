@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""
+CLI to extract commands for one or more SWE-bench instance IDs.
+
+By default, prints only the test commands (the lines between START_TEST_OUTPUT and END_TEST_OUTPUT)
+for each instance. You can choose other sections with --section.
+
+Usage:
+    python -m swebench.harness.get_instance_commands -i django__django-15180 pytest-dev__pytest-10482
+    python -m swebench.harness.get_instance_commands -i ... --section eval
+    python -m swebench.harness.get_instance_commands -i ... --format json --output commands.json
+"""
+
+from __future__ import annotations
+
+import json
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from typing import Dict, List
+
+from swebench.harness.constants import START_TEST_OUTPUT, END_TEST_OUTPUT
+from swebench.harness.test_spec.test_spec import make_test_spec
+from swebench.harness.utils import load_swebench_dataset
+
+
+def _extract_test_commands(eval_script_list: List[str]) -> List[str]:
+    """Return only the test commands between START_TEST_OUTPUT and END_TEST_OUTPUT."""
+    try:
+        start = eval_script_list.index(f": '{START_TEST_OUTPUT}'") + 1
+        end = eval_script_list.index(f": '{END_TEST_OUTPUT}'")
+        return eval_script_list[start:end]
+    except ValueError:
+        # Markers not found; return empty list
+        return []
+
+
+def get_instance_commands(instance: Dict, section: str = "test") -> Dict[str, List[str]] | List[str]:
+    """
+    Build the TestSpec for the instance and return commands for the requested section.
+
+    section:
+      - "test" -> only the test commands (between markers)
+      - "eval" -> full eval script list
+      - "repo" -> repository setup commands
+      - "env"  -> environment setup commands
+      - "all"  -> dict with keys: env, repo, eval, test
+    """
+    ts = make_test_spec(instance)
+    if section == "test":
+        return _extract_test_commands(ts.eval_script_list)
+    elif section == "eval":
+        return ts.eval_script_list
+    elif section == "repo":
+        return ts.repo_script_list
+    elif section == "env":
+        return ts.env_script_list
+    elif section == "all":
+        return {
+            "env": ts.env_script_list,
+            "repo": ts.repo_script_list,
+            "eval": ts.eval_script_list,
+            "test": _extract_test_commands(ts.eval_script_list),
+        }
+    else:
+        raise ValueError(f"Unknown section: {section}")
+
+
+def main(
+    dataset_name: str,
+    split: str,
+    instance_ids: List[str],
+    section: str,
+    fmt: str,
+    output: str | None,
+) -> None:
+    dataset = load_swebench_dataset(dataset_name, split, instance_ids)
+    if not dataset:
+        print("No instances found for the given IDs.")
+        return
+
+    results: Dict[str, Dict[str, List[str]] | List[str]] = {}
+    for instance in dataset:
+        instance_id = instance["instance_id"]
+        results[instance_id] = get_instance_commands(instance, section)
+
+    if fmt == "json":
+        payload = json.dumps(results, indent=2)
+        if output:
+            with open(output, "w") as f:
+                f.write(payload)
+        else:
+            print(payload)
+    else:
+        # human-readable text
+        for iid, cmds in results.items():
+            print(f"Instance: {iid}")
+            if section == "all":
+                assert isinstance(cmds, dict)
+                for key in ["env", "repo", "eval", "test"]:
+                    print(f"  {key} commands:")
+                    for c in cmds[key]:
+                        print(f"    {c}")
+                print()
+            else:
+                assert isinstance(cmds, list)
+                for c in cmds:
+                    print(f"  {c}")
+                print()
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(
+        description="Extract commands for SWE-bench instance IDs.",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "-d",
+        "--dataset_name",
+        default="SWE-bench/SWE-bench_Lite",
+        type=str,
+        help="Dataset name or path to JSON/JSONL file.",
+    )
+    parser.add_argument(
+        "-s", "--split", type=str, default="test", help="Dataset split."
+    )
+    parser.add_argument(
+        "-i",
+        "--instance_ids",
+        nargs="+",
+        required=True,
+        help="Instance IDs to process (space separated).",
+    )
+    parser.add_argument(
+        "--section",
+        choices=["test", "eval", "repo", "env", "all"],
+        default="test",
+        help="Which commands to extract.",
+    )
+    parser.add_argument(
+        "--format",
+        dest="fmt",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Optional path to write JSON output.",
+    )
+
+    args = parser.parse_args()
+    main(**vars(args))
