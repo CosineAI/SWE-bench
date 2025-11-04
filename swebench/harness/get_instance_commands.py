@@ -5,10 +5,19 @@ CLI to extract commands for one or more SWE-bench instance IDs.
 By default, prints only the test commands (the lines between START_TEST_OUTPUT and END_TEST_OUTPUT)
 for each instance. You can choose other sections with --section.
 
+Instance IDs can be provided directly with -i/--instance_ids, or via a JSON file containing
+an array of string IDs using --instance_ids_file.
+
 Usage:
+    # Direct IDs
     python -m swebench.harness.get_instance_commands -i django__django-15180 pytest-dev__pytest-10482
-    python -m swebench.harness.get_instance_commands -i ... --section eval
-    python -m swebench.harness.get_instance_commands -i ... --format json --output commands.json
+
+    # From a JSON file: ["django__django-15180", "pytest-dev__pytest-10482"]
+    python -m swebench.harness.get_instance_commands --instance_ids_file ids.json
+
+    # Change section and output format
+    python -m swebench.harness.get_instance_commands --instance_ids_file ids.json --section eval
+    python -m swebench.harness.get_instance_commands --instance_ids_file ids.json --format json --output commands.json
 """
 
 from __future__ import annotations
@@ -64,15 +73,45 @@ def get_instance_commands(instance: Dict, section: str = "test") -> Dict[str, Li
         raise ValueError(f"Unknown section: {section}")
 
 
+def _load_ids(instance_ids: List[str] | None, instance_ids_file: str | None) -> List[str]:
+    """
+    Combine IDs provided directly with IDs loaded from a JSON file.
+
+    The JSON file must contain an array of strings: ["repo__repo-123", "..."]
+    """
+    ids: List[str] = list(instance_ids or [])
+    if instance_ids_file:
+        with open(instance_ids_file, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
+            raise ValueError("instance_ids_file must be a JSON array of strings")
+        ids.extend(data)
+    # de-duplicate while preserving order
+    seen = set()
+    unique_ids: List[str] = []
+    for x in ids:
+        if x not in seen:
+            unique_ids.append(x)
+            seen.add(x)
+    return unique_ids
+
+
 def main(
     dataset_name: str,
     split: str,
-    instance_ids: List[str],
+    instance_ids: List[str] | None,
+    instance_ids_file: str | None,
     section: str,
     fmt: str,
     output: str | None,
 ) -> None:
-    dataset = load_swebench_dataset(dataset_name, split, instance_ids)
+    # load IDs from CLI and JSON file
+    ids = _load_ids(instance_ids, instance_ids_file)
+    if not ids:
+        print("No instance IDs provided. Use -i/--instance_ids or --instance_ids_file.")
+        return
+
+    dataset = load_swebench_dataset(dataset_name, split, ids)
     if not dataset:
         print("No instances found for the given IDs.")
         return
@@ -126,8 +165,13 @@ if __name__ == "__main__":
         "-i",
         "--instance_ids",
         nargs="+",
-        required=True,
+        required=False,
         help="Instance IDs to process (space separated).",
+    )
+    parser.add_argument(
+        "--instance_ids_file",
+        type=str,
+        help="Path to JSON file containing an array of instance IDs.",
     )
     parser.add_argument(
         "--section",
