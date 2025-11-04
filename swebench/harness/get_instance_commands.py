@@ -26,7 +26,7 @@ import json
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from typing import Dict, List
 
-from swebench.harness.constants import START_TEST_OUTPUT, END_TEST_OUTPUT
+from swebench.harness.constants import START_TEST_OUTPUT, END_TEST_OUTPUT, MAP_REPO_VERSION_TO_SPECS
 from swebench.harness.test_spec.test_spec import make_test_spec
 from swebench.harness.utils import load_swebench_dataset
 
@@ -42,6 +42,17 @@ def _extract_test_commands(eval_script_list: List[str]) -> List[str]:
         return []
 
 
+def _get_install_cmds(instance: Dict) -> List[str]:
+    """Return the install command(s) defined in the specs for this instance."""
+    specs = MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]]
+    install = specs.get("install")
+    if install is None:
+        return []
+    if isinstance(install, list):
+        return install
+    return [install]
+
+
 def get_instance_commands(instance: Dict, section: str = "test") -> Dict[str, List[str]] | List[str]:
     """
     Build the TestSpec for the instance and return commands for the requested section.
@@ -51,7 +62,8 @@ def get_instance_commands(instance: Dict, section: str = "test") -> Dict[str, Li
       - "eval" -> full eval script list
       - "repo" -> repository setup commands
       - "env"  -> environment setup commands
-      - "all"  -> dict with keys: env, repo, eval, test
+      - "install" -> install command(s) from specs
+      - "all"  -> dict with keys: env, repo, eval, test, install
     """
     ts = make_test_spec(instance)
     if section == "test":
@@ -62,12 +74,15 @@ def get_instance_commands(instance: Dict, section: str = "test") -> Dict[str, Li
         return ts.repo_script_list
     elif section == "env":
         return ts.env_script_list
+    elif section == "install":
+        return _get_install_cmds(instance)
     elif section == "all":
         return {
             "env": ts.env_script_list,
             "repo": ts.repo_script_list,
             "eval": ts.eval_script_list,
             "test": _extract_test_commands(ts.eval_script_list),
+            "install": _get_install_cmds(instance),
         }
     else:
         raise ValueError(f"Unknown section: {section}")
@@ -134,7 +149,7 @@ def main(
             print(f"Instance: {iid}")
             if section == "all":
                 assert isinstance(cmds, dict)
-                for key in ["env", "repo", "eval", "test"]:
+                for key in ["env", "repo", "eval", "test", "install"]:
                     print(f"  {key} commands:")
                     for c in cmds[key]:
                         print(f"    {c}")
@@ -175,7 +190,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--section",
-        choices=["test", "eval", "repo", "env", "all"],
+        choices=["test", "eval", "repo", "env", "install", "all"],
         default="test",
         help="Which commands to extract.",
     )
